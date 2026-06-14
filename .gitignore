@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+
+__pycache__/
+*.py[cod]
+
+.env
+.env.*
+!.env.example
+acc.md
+error.md
+.vscode/
+
+*.tgz

@@ -1,0 +1,45 @@
+{
+  "title": "Mova Vacuum Plugin",
+  "description": "Matterbridge plugin for Mova vacuum cleaners with Matter 1.4 support",
+  "type": "object",
+  "required": ["username", "password", "country"],
+  "properties": {
+    "username": {
+      "description": "Mova account email or phone number",
+      "type": "string"
+    },
+    "password": {
+      "description": "Mova account password",
+      "type": "string"
+    },
+    "country": {
+      "description": "Cloud region for Mova API",
+      "type": "string",
+      "enum": ["eu", "cn", "us", "sg", "ru"],
+      "default": "eu"
+    },
+    "refreshInterval": {
+      "description": "Status polling interval in seconds (minimum 30)",
+      "type": "number",
+      "default": 120,
+      "minimum": 30
+    },
+    "suctionLevel": {
+      "description": "Suction level used when starting cleaning from Matter",
+      "type": "string",
+      "enum": ["quiet", "standard", "strong", "turbo"],
+      "default": "standard"
+    },
+    "vacuumAndMopMode": {
+      "description": "What Apple Home's Vacuum & Mop mode should start on MOVA",
+      "type": "string",
+      "enum": ["vac-mop", "vac-then-mop"],
+      "default": "vac-mop"
+    },
+    "unregisterOnShutdown": {
+      "description": "Unregister devices when plugin shuts down (development only)",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
