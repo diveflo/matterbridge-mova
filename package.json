@@ -1,6 +1,6 @@
 {
-  "name": "matterbridge-mova",
-  "version": "0.1.19",
+  "name": "@diveflo/matterbridge-mova",
+  "version": "0.1.18",
   "description": "Matterbridge plugin for MOVA robot vacuum cleaners with Matter 1.4 RVC support",
   "keywords": [
     "matterbridge",
