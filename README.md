@@ -100,9 +100,3 @@ npm install -g ./matterbridge-mova-*.tgz
 Publishing is handled by GitHub Actions when a GitHub release is published. See [`.github/workflows/publish.yml`](.github/workflows/publish.yml).
 
 You need to add an npm automation token as a repository secret named `NPM_TOKEN`.
-
-## TODO
-
-- Implement reliable live current-room progress by decoding MOVA map runtime data and updating Matter `ServiceArea.currentArea`.
-- Add tests around command payload generation and status mapping.
-- Verify additional MOVA models and document model-specific quirks.
