@@ -45,6 +45,7 @@ export default defineConfig([
       'import/no-unresolved': 'off', // Too many false errors with named exports
       'import/named': 'off', // Too many false errors with named exports
       'n/prefer-node-protocol': 'error', // Prefer using 'node:' protocol for built-in modules
+      'n/no-unsupported-features/node-builtins': ['error', { ignores: ['fetch', 'Request', 'Response', 'Headers', 'FormData'] }],
       'n/no-extraneous-import': 'off', // Allow imports from node_modules
       'n/no-unpublished-import': 'off', // Allow imports from unpublished packages
       'n/no-missing-import': 'off', // Matterbridge is linked, not installed

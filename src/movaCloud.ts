@@ -1432,6 +1432,8 @@ export class MovaCloudProtocol {
    * Start vacuum cleaning.
    *
    * @param did - Device ID
+   * @param cleaningMode - Optional cleaning mode to set before starting
+   * @param fanSpeed - Optional suction level to set before starting
    * @param confirm - Whether to poll and confirm command success
    */
   async startCleaning(did: string, cleaningMode?: MovaCleaningMode, fanSpeed?: MovaFanSpeed, confirm: boolean = false): Promise<boolean> {

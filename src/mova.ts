@@ -277,7 +277,7 @@ export async function discoverAndRegisterDevices(
         }
       } else if (newMode === 1) {
         // Cleaning - Start cleaning
-        const movaCleanMode = rvcToMovaCleanMode(trackedCleanMode, vacuumAndMopMode) ?? rvcToMovaCleanMode(0, vacuumAndMopMode)!;
+        const movaCleanMode = rvcToMovaCleanMode(trackedCleanMode, vacuumAndMopMode) ?? MovaCleaningMode.SweepingAndMopping;
         const cleanWholeHome = isWholeHomeSelection(selectedAreas);
         log.info(`Starting ${cleanWholeHome ? 'cleaning' : `rooms ${selectedAreas.join(', ')}`} with mode=${trackedCleanMode}, suction=${suctionLevel}`);
 
