@@ -15,16 +15,6 @@ on:
 
 permissions:
   contents: read
-  workflow_dispatch:
-    inputs:
-      publish_to_npm:
-        description: 'Publish to npm after CI passes'
-        required: true
-        default: false
-        type: boolean
-
-permissions:
-  contents: read
 
 jobs:
   build:
