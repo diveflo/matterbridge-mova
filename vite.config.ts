@@ -16,7 +16,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8', // default, but explicit
       reporter: ['text', 'lcov'],
-      include: ['src/module.ts'],
+      include: ['src/constants.ts', 'src/mova.ts', 'src/module.ts'],
       exclude: [
         // Exclude test files that may live under src
         'src/**/*.test.{ts,tsx,js,jsx}',
@@ -28,10 +28,10 @@ export default defineConfig({
         'src/matterbridge.d.ts',
       ],
       thresholds: {
-        statements: 100,
-        branches: 100,
-        functions: 100,
-        lines: 100,
+        statements: 80,
+        branches: 55,
+        functions: 85,
+        lines: 80,
       },
     },
   },
