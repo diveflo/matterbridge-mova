@@ -159,6 +159,7 @@ describe('MOVA to Matter status mapping', () => {
     expect(getOperationalStateFromMova(MovaState.Dormant, MovaStatus.Unknown)).toBe(RvcOperationalState.Docked);
     expect(getOperationalStateFromMova(999 as MovaState, MovaStatus.Unknown)).toBe(RvcOperationalState.Running);
     expect(getOperationalStateFromMova(MovaState.Unknown, MovaStatus.Unknown)).toBe(0);
+    expect(getOperationalStateFromMova(-999 as MovaState, MovaStatus.Unknown)).toBe(RvcOperationalState.Docked);
   });
 
   it('keeps paused status higher priority than active states', () => {
@@ -213,6 +214,21 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(endpoint.constructorArgs[14]).toEqual([]);
   });
 
+  it('returns null and logs when Matterbridge rejects device registration', async () => {
+    const log = createLog();
+    const registerError = new Error('registration failed');
+    const platform = {
+      log,
+      config: {},
+      registerDevice: vi.fn(async () => {
+        throw registerError;
+      }),
+    };
+
+    await expect(discoverAndRegisterDevices(platform as never, createCloud() as never, movaDevice, rooms, status())).resolves.toBeNull();
+    expect(log.error).toHaveBeenCalledWith(`Failed to register device ${movaDevice.name}: ${registerError}`);
+  });
+
   it('uses a whole-home fallback area when the cloud has not supplied rooms yet', async () => {
     const { endpoint } = await createRegisteredVacuum({ roomList: [] });
 
@@ -241,6 +257,33 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(cloud.cleanRooms).not.toHaveBeenCalled();
     expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(1);
     expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Running);
+  });
+
+  it('ignores malformed, unsupported, and app-only mode changes without sending cloud commands', async () => {
+    const { endpoint, cloud, log } = await createRegisteredVacuum();
+
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: {} });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 99 } });
+
+    expect(log.warn).toHaveBeenCalledWith('changeToMode: newMode is undefined, cannot process command');
+    expect(log.warn).toHaveBeenCalledWith('Mapping mode (2) cannot be started via Matter - use the Mova app to initiate mapping');
+    expect(log.warn).toHaveBeenCalledWith('Unsupported clean mode 99');
+    expect(cloud.startCleaning).not.toHaveBeenCalled();
+    expect(cloud.cleanRooms).not.toHaveBeenCalled();
+    expect(cloud.stopCleaning).not.toHaveBeenCalled();
+  });
+
+  it('leaves Matter attributes unchanged when a cloud command fails', async () => {
+    const { endpoint, cloud } = await createRegisteredVacuum();
+    cloud.startCleaning.mockResolvedValueOnce(false);
+    const beforeRunModeUpdates = endpoint.attributes.filter((entry) => entry.cluster === 'RvcRunMode' && entry.attribute === 'currentMode').length;
+
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+
+    expect(cloud.startCleaning).toHaveBeenCalled();
+    expect(endpoint.attributes.filter((entry) => entry.cluster === 'RvcRunMode' && entry.attribute === 'currentMode')).toHaveLength(beforeRunModeUpdates);
+    expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Charging);
   });
 
   it('cleans only selected rooms when the service-area selection is narrower than the whole home', async () => {
@@ -312,6 +355,30 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBe(12);
   });
 
+  it('reflects active cleaning, mapping, clean-mode, battery, and error changes from cloud status', async () => {
+    const { registered, endpoint } = await createRegisteredVacuum();
+
+    registered.updateStatus(
+      status({
+        state: MovaState.Cleaning,
+        status: MovaStatus.Sweeping,
+        battery: 50,
+        cleaningMode: MovaCleaningMode.Mopping,
+        errorCode: MovaErrorCode.MainBrushJammed,
+      }),
+    );
+    registered.updateStatus(status({ state: MovaState.FastMapping, status: MovaStatus.FastMapping, battery: 100 }));
+    registered.updateStatus(status({ state: MovaState.Idle, status: MovaStatus.Idle, battery: 100 }));
+
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcOperationalState', attribute: 'operationalState', value: RvcOperationalState.Running });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 1 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 2 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcCleanMode', attribute: 'currentMode', value: 2 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcOperationalState', attribute: 'operationalError', value: { errorStateId: RvcOperationalState.Stuck } });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'PowerSource', attribute: 'batChargeState', value: 3 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'PowerSource', attribute: 'batChargeState', value: 2 });
+  });
+
   it('keeps the previous battery attributes when MQTT sends a partial zero-battery update', async () => {
     const { registered, endpoint } = await createRegisteredVacuum();
 
@@ -349,5 +416,37 @@ describe('MOVA robotic vacuum endpoint', () => {
       },
     ]);
     expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toEqual([12]);
+  });
+
+  it('ignores empty room updates and resets selection when all previously selected rooms disappear', async () => {
+    const { registered, endpoint } = await createRegisteredVacuum();
+
+    const supportedAreasBefore = endpoint.lastAttribute('ServiceArea', 'supportedAreas');
+    registered.updateRooms([]);
+    expect(endpoint.lastAttribute('ServiceArea', 'supportedAreas')).toBe(supportedAreasBefore);
+
+    await endpoint.execute('selectAreas', { request: { newAreas: [99] } });
+    registered.updateRooms([{ id: 12, name: 'Hallway' }]);
+    expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toEqual([]);
+
+    registered.updateRooms([{ id: 13, name: 'Bedroom' }]);
+    expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toEqual([13]);
+  });
+
+  it('logs and keeps running when ServiceArea room updates cannot be written', async () => {
+    const { registered, endpoint, log } = await createRegisteredVacuum();
+    const originalSetAttribute = endpoint.setAttribute.bind(endpoint);
+    const serviceAreaError = new Error('service area unavailable');
+    const setAttribute = vi.spyOn(endpoint, 'setAttribute');
+    setAttribute.mockImplementation((cluster: string, attribute: string, value: unknown) => {
+      if (cluster === 'ServiceArea' && attribute === 'supportedAreas') {
+        throw serviceAreaError;
+      }
+      originalSetAttribute(cluster, attribute, value);
+    });
+
+    registered.updateRooms([{ id: 14, name: 'Office' }]);
+
+    expect(log.error).toHaveBeenCalledWith(`Failed to update ServiceArea: ${serviceAreaError}`);
   });
 });
