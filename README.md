@@ -4,10 +4,6 @@ A [Matterbridge](https://github.com/Luligu/matterbridge) plugin for MOVAhome rob
 
 The plugin exposes supported MOVA robots as Matter 1.4 Robotic Vacuum Cleaner devices, including start, pause, stop, return-to-dock, cleaning mode, battery status, and room selection where map room data is available.
 
-## Status
-
-This project is early and currently verified with a MOVA S70 Roller. Other `mova.vacuum.*` models may work if they use the same MOVAhome cloud protocol and MIOT action layout.
-
 ## Features
 
 - MOVAhome cloud login.
@@ -22,12 +18,11 @@ This project is early and currently verified with a MOVA S70 Roller. Other `mova
 ## Known Limitations
 
 - Live "currently cleaning room" progress is not implemented yet. Matterbridge exposes room selection, but `ServiceArea.currentArea` may remain empty or stale during multi-room cleaning.
-- Only the MOVAhome cloud path is implemented. Local LAN control is not supported.
-- Model support is intentionally broad (`mova.vacuum.*`) but only tested on a small number of devices.
+- Model support is intentionally broad (`mova.vacuum.*`) but has currently only been tested on a S70 Roller.
 
 ## Installation
 
-After this package is published to npm, install it from the Matterbridge UI by searching for:
+You can get the plugin via the Matterbridge UI from npm:
 
 ```text
 matterbridge-mova
@@ -73,30 +68,3 @@ Example:
 | `vacuumAndMopMode`     | No       | `vac-mop`  | What Apple Home's Vacuum & Mop mode should do: `vac-mop` or `vac-then-mop`.          |
 | `refreshInterval`      | No       | `120`      | Cloud polling interval in seconds.                                                   |
 | `unregisterOnShutdown` | No       | `false`    | Unregister devices when the plugin shuts down. Mostly useful during development.     |
-
-## Development
-
-```bash
-npm ci
-npm run build
-```
-
-Add the local checkout to Matterbridge:
-
-```bash
-matterbridge -add .
-matterbridge -enable .
-```
-
-For a local package test:
-
-```bash
-npm pack
-npm install -g ./matterbridge-mova-*.tgz
-```
-
-## Publishing
-
-Publishing is handled by GitHub Actions when a GitHub release is published. See [`.github/workflows/publish.yml`](.github/workflows/publish.yml).
-
-You need to add an npm automation token as a repository secret named `NPM_TOKEN`.
