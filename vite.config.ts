@@ -16,7 +16,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8', // default, but explicit
       reporter: ['text', 'lcov'],
-      include: ['src/constants.ts', 'src/mova.ts', 'src/module.ts'],
+      include: ['src/constants.ts', 'src/mova.ts', 'src/platform.ts', 'src/module.ts'],
       exclude: [
         // Exclude test files that may live under src
         'src/**/*.test.{ts,tsx,js,jsx}',
