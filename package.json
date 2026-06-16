@@ -33,6 +33,12 @@
   "type": "module",
   "main": "dist/module.js",
   "types": "dist/module.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/module.js",
+      "types": "./dist/module.d.ts"
+    }
+  },
   "files": [
     "dist",
     "matterbridge-mova.schema.json",
@@ -41,13 +47,22 @@
   ],
   "scripts": {
     "start": "matterbridge",
-    "build": "tsc",
-    "buildProduction": "tsc --project tsconfig.production.json",
-    "clean": "shx rm -rf tsconfig.tsbuildinfo dist coverage",
+    "build": "tsc --project tsconfig.build.json",
+    "buildProduction": "tsc --project tsconfig.build.production.json",
+    "clean": "shx rm -rf *.tsbuildinfo dist coverage .cache",
     "cleanBuild": "npm run clean && npm run build",
     "cleanBuildProduction": "npm run clean && npm run buildProduction",
-    "watch": "tsc --watch",
+    "watch": "tsc --project tsconfig.build.json --watch",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "node --no-warnings --experimental-vm-modules node_modules/jest/bin/jest.js --maxWorkers=100%",
+    "test:watch": "node --no-warnings --experimental-vm-modules node_modules/jest/bin/jest.js --maxWorkers=100% --watch",
+    "test:verbose": "node --no-warnings --experimental-vm-modules node_modules/jest/bin/jest.js --maxWorkers=100% --verbose",
+    "test:coverage": "node --no-warnings --experimental-vm-modules node_modules/jest/bin/jest.js --maxWorkers=100% --coverage --coverageThreshold=\"{ \\\"global\\\": {\\\"statements\\\": 100, \\\"branches\\\": 100, \\\"lines\\\": 100, \\\"functions\\\": 100 } }\"",
+    "test:debug": "node --no-warnings --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:vitest": "vitest run",
+    "test:vitest:watch": "vitest --reporter verbose",
+    "test:vitest:verbose": "vitest run --reporter verbose",
+    "test:vitest:coverage": "vitest run --reporter verbose --coverage",
     "lint": "eslint --max-warnings=0 .",
     "lint:fix": "eslint --fix --max-warnings=0 .",
     "format": "prettier --write .",
@@ -69,8 +84,8 @@
     "@jest/globals": "30.2.0",
     "@types/jest": "30.0.0",
     "@types/node": "25.2.0",
-    "@vitest/coverage-v8": "4.0.18",
-    "@vitest/eslint-plugin": "1.6.6",
+    "@vitest/coverage-v8": "^4.1.7",
+    "@vitest/eslint-plugin": "^1.6.17",
     "eslint": "9.39.2",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-import": "2.32.0",
@@ -86,7 +101,7 @@
     "ts-jest": "29.4.6",
     "typescript": "5.9.3",
     "typescript-eslint": "^8.54.0",
-    "vitest": "4.0.18"
+    "vitest": "^4.1.7"
   },
   "engines": {
     "node": ">=20.19.0 <21.0.0 || >=22.13.0 <23.0.0 || >=24.0.0 <25.0.0 || >=26.0.0 <27.0.0"

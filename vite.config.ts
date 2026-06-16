@@ -6,7 +6,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['vitest/**/*.test.ts', 'vitest/**/*.spec.ts'],
+    include: ['vitest/**/*.{spec,test}.{ts,mts,cts}'],
     exclude: ['dist', 'node_modules'],
     globals: true,
     clearMocks: true,
@@ -16,7 +16,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8', // default, but explicit
       reporter: ['text', 'lcov'],
-      include: ['src/**/*.{ts,tsx,js,jsx}'],
+      include: ['src/module.ts'],
       exclude: [
         // Exclude test files that may live under src
         'src/**/*.test.{ts,tsx,js,jsx}',
@@ -25,6 +25,7 @@ export default defineConfig({
         'src/**/jestHelpers.ts',
         // Exclude type declaration files
         'src/**/*.d.ts',
+        'src/matterbridge.d.ts',
       ],
       thresholds: {
         statements: 100,

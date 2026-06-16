@@ -3,6 +3,7 @@
 
 # Ignore specific directories
 .git/
+.cache/
 coverage/
 dist/
 jest/
@@ -10,6 +11,7 @@ node_modules/
 temp/
 
 # Ignore specific files
+package-lock.json
 **/*.html
 
 # Package specific directories and files that should be ignored
