@@ -1,6 +1,6 @@
 {
   "name": "matterbridge-mova",
-  "version": "0.1.25",
+  "version": "1.0.0",
   "description": "Matterbridge MOVA robot vacuum cleaner plugin",
   "keywords": [
     "matterbridge",

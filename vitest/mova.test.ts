@@ -247,16 +247,37 @@ describe('MOVA robotic vacuum endpoint', () => {
 
   it('starts whole-home cleaning with the configured suction and vacuum/mop mode', async () => {
     const { endpoint, cloud } = await createRegisteredVacuum({
-      config: { suctionLevel: 'turbo', vacuumAndMopMode: 'vac-then-mop' },
+      config: { suctionLevel: 'max', vacuumAndMopMode: 'vac-then-mop' },
     });
 
-    await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 7 } });
     await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
 
-    expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.MoppingAfterSweeping, MovaFanSpeed.Turbo);
+    expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.MoppingAfterSweeping, MovaFanSpeed.Max);
     expect(cloud.cleanRooms).not.toHaveBeenCalled();
     expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(1);
     expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Running);
+  });
+
+  it('exposes suction variants as Matter clean modes', async () => {
+    const { endpoint, cloud } = await createRegisteredVacuum();
+
+    expect(endpoint.constructorArgs[6]).toEqual([
+      { label: 'Vacuum Quiet', mode: 0, modeTags: [{ value: 16385 }, { value: 2 }] },
+      { label: 'Vacuum Standard', mode: 1, modeTags: [{ value: 16385 }, { value: 6 }] },
+      { label: 'Vacuum Intense', mode: 2, modeTags: [{ value: 16385 }, { value: 7 }] },
+      { label: 'Vacuum Max', mode: 3, modeTags: [{ value: 16385 }, { value: 16384 }] },
+      { label: 'Vacuum & Mop Quiet', mode: 4, modeTags: [{ value: 16385 }, { value: 16386 }, { value: 2 }] },
+      { label: 'Vacuum & Mop Standard', mode: 5, modeTags: [{ value: 16385 }, { value: 16386 }, { value: 6 }] },
+      { label: 'Vacuum & Mop Intense', mode: 6, modeTags: [{ value: 16385 }, { value: 16386 }, { value: 7 }] },
+      { label: 'Vacuum & Mop Max', mode: 7, modeTags: [{ value: 16385 }, { value: 16386 }, { value: 16384 }] },
+      { label: 'Mop Only', mode: 8, modeTags: [{ value: 16386 }] },
+    ]);
+
+    await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 3 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+
+    expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Max);
   });
 
   it('ignores malformed, unsupported, and app-only mode changes without sending cloud commands', async () => {
@@ -373,7 +394,7 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcOperationalState', attribute: 'operationalState', value: RvcOperationalState.Running });
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 1 });
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 2 });
-    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcCleanMode', attribute: 'currentMode', value: 2 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcCleanMode', attribute: 'currentMode', value: 8 });
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcOperationalState', attribute: 'operationalError', value: { errorStateId: RvcOperationalState.Stuck } });
     expect(endpoint.attributes).toContainEqual({ cluster: 'PowerSource', attribute: 'batChargeState', value: 3 });
     expect(endpoint.attributes).toContainEqual({ cluster: 'PowerSource', attribute: 'batChargeState', value: 2 });

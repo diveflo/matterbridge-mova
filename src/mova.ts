@@ -37,6 +37,10 @@ const RvcRunModeTag = {
 } as const;
 
 const RvcCleanModeTag = {
+  Quiet: 0x0002,
+  Min: 0x0006,
+  Max: 0x0007,
+  DeepClean: 0x4000,
   Vacuum: 16385,
   Mop: 16386,
 } as const;
@@ -62,11 +66,38 @@ const RVC_RUN_MODES = [
   { label: 'Mapping', mode: 2, modeTags: [{ value: RvcRunModeTag.Mapping }] },
 ];
 
-const RVC_CLEAN_MODES = [
-  { label: 'Vacuum', mode: 0, modeTags: [{ value: RvcCleanModeTag.Vacuum }] },
-  { label: 'Vacuum & Mop', mode: 1, modeTags: [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }] },
-  { label: 'Mop Only', mode: 2, modeTags: [{ value: RvcCleanModeTag.Mop }] },
+interface RvcCleanModeDefinition {
+  label: string;
+  mode: number;
+  modeTags: Array<{ value: number }>;
+  cleanMode: 'vac' | 'vac-mop' | 'mop';
+  fanSpeed?: MovaFanSpeed;
+}
+
+const VACUUM_QUIET_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Quiet }];
+const VACUUM_STANDARD_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Min }];
+const VACUUM_INTENSE_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Max }];
+const VACUUM_MAX_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.DeepClean }];
+const VACUUM_AND_MOP_QUIET_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.Quiet }];
+const VACUUM_AND_MOP_STANDARD_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.Min }];
+const VACUUM_AND_MOP_INTENSE_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.Max }];
+const VACUUM_AND_MOP_MAX_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.DeepClean }];
+const MOP_MODE_TAGS = [{ value: RvcCleanModeTag.Mop }];
+
+const RVC_CLEAN_MODES: RvcCleanModeDefinition[] = [
+  { label: 'Vacuum Quiet', mode: 0, modeTags: VACUUM_QUIET_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Quiet },
+  { label: 'Vacuum Standard', mode: 1, modeTags: VACUUM_STANDARD_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Standard },
+  { label: 'Vacuum Intense', mode: 2, modeTags: VACUUM_INTENSE_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Intense },
+  { label: 'Vacuum Max', mode: 3, modeTags: VACUUM_MAX_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Max },
+  { label: 'Vacuum & Mop Quiet', mode: 4, modeTags: VACUUM_AND_MOP_QUIET_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Quiet },
+  { label: 'Vacuum & Mop Standard', mode: 5, modeTags: VACUUM_AND_MOP_STANDARD_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Standard },
+  { label: 'Vacuum & Mop Intense', mode: 6, modeTags: VACUUM_AND_MOP_INTENSE_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Intense },
+  { label: 'Vacuum & Mop Max', mode: 7, modeTags: VACUUM_AND_MOP_MAX_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Max },
+  { label: 'Mop Only', mode: 8, modeTags: MOP_MODE_TAGS, cleanMode: 'mop' },
 ];
+
+const RVC_CLEAN_MODE_BY_MODE = new Map(RVC_CLEAN_MODES.map((mode) => [mode.mode, mode]));
+const RVC_SUPPORTED_CLEAN_MODES = RVC_CLEAN_MODES.map(({ label, mode, modeTags }) => ({ label, mode, modeTags }));
 
 // operationalStateLabel must NOT be set for standard states (0-127) per Matter spec
 const RVC_OPERATIONAL_STATES = [
@@ -82,8 +113,8 @@ const RVC_OPERATIONAL_STATES = [
 const CONFIG_SUCTION_LEVELS: Record<MovaSuctionLevelName, MovaFanSpeed> = {
   quiet: MovaFanSpeed.Quiet,
   standard: MovaFanSpeed.Standard,
-  strong: MovaFanSpeed.Strong,
-  turbo: MovaFanSpeed.Turbo,
+  intense: MovaFanSpeed.Intense,
+  max: MovaFanSpeed.Max,
 };
 
 function configuredSuctionLevel(value: unknown): MovaFanSpeed {
@@ -98,16 +129,28 @@ function configuredVacuumAndMopMode(value: unknown): MovaVacuumAndMopMode {
 }
 
 function rvcToMovaCleanMode(rvcMode: number, vacuumAndMopMode: MovaVacuumAndMopMode): MovaCleaningMode | undefined {
-  if (rvcMode === 0) return MovaCleaningMode.SweepingAndMopping; // S70 raw 2 = vacuum only
-  if (rvcMode === 1) return vacuumAndMopMode === 'vac-then-mop' ? MovaCleaningMode.MoppingAfterSweeping : MovaCleaningMode.Sweeping;
-  if (rvcMode === 2) return MovaCleaningMode.Mopping;
+  const mode = RVC_CLEAN_MODE_BY_MODE.get(rvcMode);
+  if (!mode) return undefined;
+
+  if (mode.cleanMode === 'vac') return MovaCleaningMode.SweepingAndMopping; // S70 raw 2 = vacuum only
+  if (mode.cleanMode === 'vac-mop') return vacuumAndMopMode === 'vac-then-mop' ? MovaCleaningMode.MoppingAfterSweeping : MovaCleaningMode.Sweeping;
+  if (mode.cleanMode === 'mop') return MovaCleaningMode.Mopping;
   return undefined;
 }
 
-function movaToRvcCleanMode(cleaningMode: MovaCleaningMode): number {
-  if (cleaningMode === MovaCleaningMode.SweepingAndMopping) return 0;
-  if (cleaningMode === MovaCleaningMode.Mopping) return 2;
-  return 1;
+function rvcToMovaFanSpeed(rvcMode: number, fallback: MovaFanSpeed): MovaFanSpeed {
+  return RVC_CLEAN_MODE_BY_MODE.get(rvcMode)?.fanSpeed ?? fallback;
+}
+
+function rvcCleanModeFor(cleanMode: 'vac' | 'vac-mop' | 'mop', fanSpeed: MovaFanSpeed): number {
+  const mode = RVC_CLEAN_MODES.find((entry) => entry.cleanMode === cleanMode && (entry.fanSpeed === fanSpeed || entry.fanSpeed === undefined));
+  return mode?.mode ?? 1;
+}
+
+function movaToRvcCleanMode(cleaningMode: MovaCleaningMode, fanSpeed: MovaFanSpeed): number {
+  if (cleaningMode === MovaCleaningMode.SweepingAndMopping) return rvcCleanModeFor('vac', fanSpeed);
+  if (cleaningMode === MovaCleaningMode.Mopping) return rvcCleanModeFor('mop', fanSpeed);
+  return rvcCleanModeFor('vac-mop', fanSpeed);
 }
 
 /**
@@ -129,6 +172,9 @@ export async function discoverAndRegisterDevices(
   const { log } = platform;
   const suctionLevel = configuredSuctionLevel(platform.config.suctionLevel);
   const vacuumAndMopMode = configuredVacuumAndMopMode(platform.config.vacuumAndMopMode);
+  const initialCleanMode = initialStatus
+    ? movaToRvcCleanMode(initialStatus.cleaningMode ?? MovaCleaningMode.SweepingAndMopping, initialStatus.fanSpeed)
+    : rvcCleanModeFor('vac', suctionLevel);
 
   log.info(`Creating Matter RVC device for ${device.name} (${device.model})`);
 
@@ -198,8 +244,8 @@ export async function discoverAndRegisterDevices(
     'server', // mode - server for Apple Home compatibility
     initialRunMode, // currentRunMode - computed from initial status
     RVC_RUN_MODES, // supportedRunModes
-    0, // currentCleanMode (Vacuum)
-    RVC_CLEAN_MODES, // supportedCleanModes
+    initialCleanMode, // currentCleanMode
+    RVC_SUPPORTED_CLEAN_MODES, // supportedCleanModes
     null, // currentPhase
     null, // phaseList
     initialOperationalState, // operationalState
@@ -215,7 +261,7 @@ export async function discoverAndRegisterDevices(
 
   // State tracking for updates
   let trackedRunMode = initialRunMode;
-  let trackedCleanMode = 0; // Vacuum
+  let trackedCleanMode = initialCleanMode;
   let trackedOperationalState = initialOperationalState;
   let trackedError: number | null | undefined = undefined; // undefined = not yet set
   let selectedAreas: number[] = [...initialSelectedAreas];
@@ -278,12 +324,13 @@ export async function discoverAndRegisterDevices(
       } else if (newMode === 1) {
         // Cleaning - Start cleaning
         const movaCleanMode = rvcToMovaCleanMode(trackedCleanMode, vacuumAndMopMode) ?? MovaCleaningMode.SweepingAndMopping;
+        const movaFanSpeed = rvcToMovaFanSpeed(trackedCleanMode, suctionLevel);
         const cleanWholeHome = isWholeHomeSelection(selectedAreas);
-        log.info(`Starting ${cleanWholeHome ? 'cleaning' : `rooms ${selectedAreas.join(', ')}`} with mode=${trackedCleanMode}, suction=${suctionLevel}`);
+        log.info(`Starting ${cleanWholeHome ? 'cleaning' : `rooms ${selectedAreas.join(', ')}`} with mode=${trackedCleanMode}, suction=${movaFanSpeed}`);
 
         const success = !cleanWholeHome
-          ? await cloud.cleanRooms(device.did, selectedAreas, 1, movaCleanMode, suctionLevel)
-          : await cloud.startCleaning(device.did, movaCleanMode, suctionLevel);
+          ? await cloud.cleanRooms(device.did, selectedAreas, 1, movaCleanMode, movaFanSpeed)
+          : await cloud.startCleaning(device.did, movaCleanMode, movaFanSpeed);
         if (success) {
           trackedRunMode = 1;
           rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
@@ -454,13 +501,13 @@ export async function discoverAndRegisterDevices(
     }
 
     if (status.cleaningMode !== undefined) {
-      const newCleanMode = movaToRvcCleanMode(status.cleaningMode);
+      const newCleanMode = movaToRvcCleanMode(status.cleaningMode, status.fanSpeed);
       if (newCleanMode !== trackedCleanMode) {
         trackedCleanMode = newCleanMode;
         rvc.setAttribute('RvcCleanMode', 'currentMode', trackedCleanMode, log);
       }
     } else if (trackedCleanMode === undefined) {
-      trackedCleanMode = 0;
+      trackedCleanMode = rvcCleanModeFor('vac', suctionLevel);
       rvc.setAttribute('RvcCleanMode', 'currentMode', trackedCleanMode, log);
     }
 
@@ -536,7 +583,7 @@ export async function discoverAndRegisterDevices(
     log.info(`Set initial run mode to ${initialRunMode} (0=Idle, 1=Cleaning, 2=Mapping)`);
 
     rvc.setAttribute('RvcCleanMode', 'currentMode', trackedCleanMode, log);
-    log.info(`Set initial clean mode to ${trackedCleanMode} (0=Vacuum, 1=Vacuum&Mop, 2=MopOnly)`);
+    log.info(`Set initial clean mode to ${trackedCleanMode} (0-3=Vacuum suction, 4-7=Vacuum&Mop suction, 8=MopOnly)`);
 
     // Set initial error state (required by Matter - must always be set)
     const initialError = initialStatus ? getOperationalErrorFromMova(initialStatus.errorCode) : null;

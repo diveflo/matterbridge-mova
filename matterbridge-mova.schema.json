@@ -25,9 +25,9 @@
       "minimum": 30
     },
     "suctionLevel": {
-      "description": "Suction level used when starting cleaning from Matter",
+      "description": "Fallback suction level used when a Matter clean-mode selection does not include suction",
       "type": "string",
-      "enum": ["quiet", "standard", "strong", "turbo"],
+      "enum": ["quiet", "standard", "intense", "max"],
       "default": "standard"
     },
     "vacuumAndMopMode": {

@@ -8,9 +8,9 @@ The plugin exposes supported MOVA robots as Matter 1.4 Robotic Vacuum Cleaner de
 
 - MOVAhome cloud login.
 - Automatic discovery of MOVA robot vacuums.
-- Matter RVC support for run mode, clean mode, operational state, battery, and service areas.
+- Matter RVC support for run mode, clean mode, suction variants, operational state, battery, and service areas.
 - Room cleaning through the Matter ServiceArea cluster.
-- Configurable suction level for Matter-started cleaning.
+- Suction selection through exposed Matter clean modes where the controller supports them.
 - Configurable behavior for Apple Home's combined Vacuum & Mop mode.
 - Dynamic cloud command routing through each robot's `bindDomain`.
 - MQTT status updates with cloud polling fallback.
@@ -59,12 +59,13 @@ Example:
 
 ### Options
 
-| Option                 | Required | Default    | Description                                                                          |
-| ---------------------- | -------- | ---------- | ------------------------------------------------------------------------------------ |
-| `username`             | Yes      |            | MOVAhome account username.                                                           |
-| `password`             | Yes      |            | MOVAhome account password.                                                           |
-| `country`              | Yes      | `eu`       | MOVA region: `cn`, `eu`, `us`, `sg`, or `ru`.                                        |
-| `suctionLevel`         | No       | `standard` | Suction used for Matter-started cleaning: `quiet`, `standard`, `strong`, or `turbo`. |
-| `vacuumAndMopMode`     | No       | `vac-mop`  | What Apple Home's Vacuum & Mop mode should do: `vac-mop` or `vac-then-mop`.          |
-| `refreshInterval`      | No       | `120`      | Cloud polling interval in seconds.                                                   |
-| `unregisterOnShutdown` | No       | `false`    | Unregister devices when the plugin shuts down. Mostly useful during development.     |
+| Option                 | Required | Default    | Description                                                                                                                            |
+| ---------------------- | -------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `username`             | Yes      |            | MOVAhome account username.                                                                                                             |
+| `password`             | Yes      |            | MOVAhome account password.                                                                                                             |
+| `country`              | Yes      | `eu`       | MOVA region: `cn`, `eu`, `us`, `sg`, or `ru`.                                                                                          |
+| `suctionLevel`         | No       | `standard` | Fallback suction used when a Matter clean-mode selection does not include a suction variant: `quiet`, `standard`, `intense`, or `max`. |
+| `vacuumAndMopMode`     | No       | `vac-mop`  | What Apple Home's Vacuum & Mop mode should do: `vac-mop` or `vac-then-mop`.                                                            |
+| `refreshInterval`      | No       | `120`      | Cloud polling interval in seconds.                                                                                                     |
+| `unregisterOnShutdown` | No       | `false`    | Unregister devices when the plugin shuts down. Mostly useful during development.                                                       |
+

@@ -17,7 +17,7 @@ export interface MovaConfig {
 }
 
 export type MovaCountry = 'cn' | 'eu' | 'us' | 'sg' | 'ru';
-export type MovaSuctionLevelName = 'quiet' | 'standard' | 'strong' | 'turbo';
+export type MovaSuctionLevelName = 'quiet' | 'standard' | 'intense' | 'max';
 export type MovaVacuumAndMopMode = 'vac-mop' | 'vac-then-mop';
 
 // Authentication types
@@ -194,8 +194,8 @@ export enum MovaStatus {
 export enum MovaFanSpeed {
   Quiet = 0,
   Standard = 1,
-  Strong = 2,
-  Turbo = 3,
+  Intense = 2,
+  Max = 3,
 }
 
 export enum MovaWaterFlow {

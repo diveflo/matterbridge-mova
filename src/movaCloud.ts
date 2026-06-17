@@ -1625,10 +1625,10 @@ export class MovaCloudProtocol {
    * Set vacuum suction level.
    *
    * @param did - Device ID
-   * @param fanSpeed - 0=quiet, 1=standard, 2=strong, 3=turbo
+   * @param fanSpeed - 0=quiet, 1=standard, 2=intense, 3=max
    */
   async setSuctionLevel(did: string, fanSpeed: MovaFanSpeed): Promise<void> {
-    this.log.info(`Setting suction level to ${fanSpeed} (0=quiet, 1=standard, 2=strong, 3=turbo)`);
+    this.log.info(`Setting suction level to ${fanSpeed} (0=quiet, 1=standard, 2=intense, 3=max)`);
     await this.sendCommand(did, 'set_properties', [
       {
         siid: MIOT_PROPERTIES.suctionLevel.siid,

@@ -84,7 +84,7 @@ describe('MOVA cloud response parsing', () => {
         prop(MIOT_PROPERTIES.operatingMode.siid, MIOT_PROPERTIES.operatingMode.piid, MovaState.Cleaning),
         prop(MIOT_PROPERTIES.deviceStatus.siid, MIOT_PROPERTIES.deviceStatus.piid, MovaStatus.Sweeping),
         prop(MIOT_PROPERTIES.batteryLevel.siid, MIOT_PROPERTIES.batteryLevel.piid, 81),
-        prop(MIOT_PROPERTIES.suctionLevel.siid, MIOT_PROPERTIES.suctionLevel.piid, MovaFanSpeed.Turbo),
+        prop(MIOT_PROPERTIES.suctionLevel.siid, MIOT_PROPERTIES.suctionLevel.piid, MovaFanSpeed.Max),
         prop(MIOT_PROPERTIES.waterFlow.siid, MIOT_PROPERTIES.waterFlow.piid, MovaWaterFlow.High),
         prop(MIOT_PROPERTIES.cleaningMode.siid, MIOT_PROPERTIES.cleaningMode.piid, MovaCleaningMode.Sweeping),
         prop(MIOT_PROPERTIES.deviceFault.siid, MIOT_PROPERTIES.deviceFault.piid, MovaErrorCode.None),
@@ -100,7 +100,7 @@ describe('MOVA cloud response parsing', () => {
       state: MovaState.Cleaning,
       status: MovaStatus.Sweeping,
       battery: 81,
-      fanSpeed: MovaFanSpeed.Turbo,
+      fanSpeed: MovaFanSpeed.Max,
       waterFlow: MovaWaterFlow.High,
       cleaningMode: MovaCleaningMode.Sweeping,
       errorCode: MovaErrorCode.None,
@@ -155,7 +155,7 @@ describe('MOVA cloud command payloads', () => {
     const sendCommand = vi.fn(async () => ({ ok: true }));
     cloud.sendCommand = sendCommand;
 
-    await expect(cloud.startCleaning('vacuum-1', MovaCleaningMode.MoppingAfterSweeping, MovaFanSpeed.Turbo)).resolves.toBe(true);
+    await expect(cloud.startCleaning('vacuum-1', MovaCleaningMode.MoppingAfterSweeping, MovaFanSpeed.Max)).resolves.toBe(true);
 
     expect(sendCommand).toHaveBeenNthCalledWith(1, 'vacuum-1', 'set_properties', [
       {
@@ -168,7 +168,7 @@ describe('MOVA cloud command payloads', () => {
       {
         siid: MIOT_PROPERTIES.suctionLevel.siid,
         piid: MIOT_PROPERTIES.suctionLevel.piid,
-        value: MovaFanSpeed.Turbo,
+        value: MovaFanSpeed.Max,
       },
     ]);
     expect(sendCommand).toHaveBeenNthCalledWith(3, 'vacuum-1', 'action', [MIOT_ACTIONS.startClean.siid, MIOT_ACTIONS.startClean.aiid, []]);
@@ -179,7 +179,7 @@ describe('MOVA cloud command payloads', () => {
     const sendCommand = vi.fn(async () => ({ ok: true }));
     cloud.sendCommand = sendCommand;
 
-    await expect(cloud.cleanRooms('vacuum-1', [12, 11], 2, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Strong)).resolves.toBe(true);
+    await expect(cloud.cleanRooms('vacuum-1', [12, 11], 2, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Intense)).resolves.toBe(true);
 
     expect(sendCommand).toHaveBeenNthCalledWith(1, 'vacuum-1', 'set_properties', [
       {
@@ -192,7 +192,7 @@ describe('MOVA cloud command payloads', () => {
       {
         siid: MIOT_PROPERTIES.suctionLevel.siid,
         piid: MIOT_PROPERTIES.suctionLevel.piid,
-        value: MovaFanSpeed.Strong,
+        value: MovaFanSpeed.Intense,
       },
     ]);
     expect(sendCommand).toHaveBeenNthCalledWith(3, 'vacuum-1', 'action', [
@@ -204,8 +204,8 @@ describe('MOVA cloud command payloads', () => {
           piid: MIOT_ACTION_PARAMS.cleaningProperties,
           value: JSON.stringify({
             selects: [
-              [12, 2, MovaFanSpeed.Strong, 0, 1],
-              [11, 2, MovaFanSpeed.Strong, 0, 2],
+              [12, 2, MovaFanSpeed.Intense, 0, 1],
+              [11, 2, MovaFanSpeed.Intense, 0, 2],
             ],
           }),
         },
