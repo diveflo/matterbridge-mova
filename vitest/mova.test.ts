@@ -375,6 +375,36 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBeNull();
   });
 
+  it('rolls back Matter state when stopping fails after an optimistic idle update', async () => {
+    const { endpoint, cloud, log } = await createRegisteredVacuum();
+    cloud.stopCleaning.mockResolvedValueOnce(false);
+
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await waitForCommandSideEffects();
+
+    expect(cloud.stopCleaning).toHaveBeenCalledWith(movaDevice.did);
+    expect(log.warn).toHaveBeenCalledWith(`Stop cleaning for ${movaDevice.name} failed; reverting optimistic Matter state`);
+    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(1);
+    expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Charging);
+  });
+
+  it('rolls back Matter state when returning to dock fails', async () => {
+    const { endpoint, cloud, log } = await createRegisteredVacuum({
+      initialStatus: status({ state: MovaState.Cleaning, status: MovaStatus.Sweeping, currentArea: 12 }),
+    });
+    cloud.goHome.mockResolvedValueOnce(false);
+
+    await endpoint.execute('goHome');
+    await waitForCommandSideEffects();
+
+    expect(cloud.stopCleaning).toHaveBeenCalledWith(movaDevice.did);
+    expect(cloud.goHome).toHaveBeenCalledWith(movaDevice.did);
+    expect(log.warn).toHaveBeenCalledWith(`Return to dock for ${movaDevice.name} failed; reverting optimistic Matter state`);
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 2 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcOperationalState', attribute: 'operationalState', value: RvcOperationalState.Running });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'ServiceArea', attribute: 'currentArea', value: 12 });
+  });
+
   it('updates Matter attributes from cloud status without letting stale cleaning states override docked status', async () => {
     const { registered, endpoint } = await createRegisteredVacuum();
 
