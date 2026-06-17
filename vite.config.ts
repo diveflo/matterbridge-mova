@@ -25,7 +25,6 @@ export default defineConfig({
         'src/**/jestHelpers.ts',
         // Exclude type declaration files
         'src/**/*.d.ts',
-        'src/matterbridge.d.ts',
       ],
       thresholds: {
         statements: 90,
