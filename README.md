@@ -68,4 +68,3 @@ Example:
 | `vacuumAndMopMode`     | No       | `vac-mop`  | What Apple Home's Vacuum & Mop mode should do: `vac-mop` or `vac-then-mop`.                                                            |
 | `refreshInterval`      | No       | `120`      | Cloud polling interval in seconds.                                                                                                     |
 | `unregisterOnShutdown` | No       | `false`    | Unregister devices when the plugin shuts down. Mostly useful during development.                                                       |
-
