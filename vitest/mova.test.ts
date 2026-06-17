@@ -137,6 +137,10 @@ async function createRegisteredVacuum(options: { config?: Record<string, unknown
   return { registered, endpoint, cloud, log, registerDevice };
 }
 
+async function waitForCommandSideEffects(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe('MOVA to Matter status mapping', () => {
   it('builds stable MOVA API identifiers used by cloud requests', () => {
     expect(getMovaApiUrl('eu')).toBe('https://eu.iot.mova-tech.com:13267');
@@ -251,12 +255,10 @@ describe('MOVA robotic vacuum endpoint', () => {
     });
 
     await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 7 } });
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
 
     expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.MoppingAfterSweeping, MovaFanSpeed.Max);
     expect(cloud.cleanRooms).not.toHaveBeenCalled();
-    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(1);
-    expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Running);
   });
 
   it('exposes suction variants as Matter clean modes', async () => {
@@ -275,7 +277,7 @@ describe('MOVA robotic vacuum endpoint', () => {
     ]);
 
     await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 3 } });
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
 
     expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Max);
   });
@@ -284,26 +286,26 @@ describe('MOVA robotic vacuum endpoint', () => {
     const { endpoint, cloud, log } = await createRegisteredVacuum();
 
     await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: {} });
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 3 } });
     await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 99 } });
 
     expect(log.warn).toHaveBeenCalledWith('changeToMode: newMode is undefined, cannot process command');
-    expect(log.warn).toHaveBeenCalledWith('Mapping mode (2) cannot be started via Matter - use the Mova app to initiate mapping');
+    expect(log.warn).toHaveBeenCalledWith('Mapping mode (3) cannot be started via Matter - use the Mova app to initiate mapping');
     expect(log.warn).toHaveBeenCalledWith('Unsupported clean mode 99');
     expect(cloud.startCleaning).not.toHaveBeenCalled();
     expect(cloud.cleanRooms).not.toHaveBeenCalled();
     expect(cloud.stopCleaning).not.toHaveBeenCalled();
   });
 
-  it('leaves Matter attributes unchanged when a cloud command fails', async () => {
-    const { endpoint, cloud } = await createRegisteredVacuum();
+  it('optimistically updates Matter state and rolls back when a cloud command fails', async () => {
+    const { endpoint, cloud, log } = await createRegisteredVacuum();
     cloud.startCleaning.mockResolvedValueOnce(false);
-    const beforeRunModeUpdates = endpoint.attributes.filter((entry) => entry.cluster === 'RvcRunMode' && entry.attribute === 'currentMode').length;
 
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
 
     expect(cloud.startCleaning).toHaveBeenCalled();
-    expect(endpoint.attributes.filter((entry) => entry.cluster === 'RvcRunMode' && entry.attribute === 'currentMode')).toHaveLength(beforeRunModeUpdates);
+    expect(log.warn).toHaveBeenCalledWith(`Start cleaning for ${movaDevice.name} failed; reverting optimistic Matter state`);
+    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(1);
     expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Charging);
   });
 
@@ -311,29 +313,44 @@ describe('MOVA robotic vacuum endpoint', () => {
     const { endpoint, cloud } = await createRegisteredVacuum();
 
     await endpoint.execute('selectAreas', { request: { newAreas: [12] } });
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
 
     expect(cloud.cleanRooms).toHaveBeenCalledWith(movaDevice.did, [12], 1, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Standard);
     expect(cloud.startCleaning).not.toHaveBeenCalled();
     expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toEqual([12]);
+    await waitForCommandSideEffects();
+    expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBe(12);
+  });
+
+  it('uses the first selected room as current area for all selected-room cleaning', async () => {
+    const { endpoint, cloud } = await createRegisteredVacuum();
+
+    await endpoint.execute('selectAreas', { request: { newAreas: [12, 11] } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
+
+    expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Standard);
+    await waitForCommandSideEffects();
+    expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBe(12);
   });
 
   it('treats an empty service-area selection as all rooms, matching Matter controller semantics', async () => {
     const { endpoint, cloud } = await createRegisteredVacuum();
 
     await endpoint.execute('selectAreas', { request: { newAreas: [] } });
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
 
     expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toEqual([11, 12]);
     expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Standard);
+    await waitForCommandSideEffects();
+    expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBe(11);
   });
 
   it('does not change cleaning mode while the vacuum is actively running', async () => {
     const { endpoint, cloud, log } = await createRegisteredVacuum();
 
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
     await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 2 } });
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
 
     expect(log.warn).toHaveBeenCalledWith('Cannot change clean mode while actively cleaning - pause or stop first');
     expect(cloud.startCleaning).toHaveBeenLastCalledWith(movaDevice.did, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Standard);
@@ -345,7 +362,7 @@ describe('MOVA robotic vacuum endpoint', () => {
     await endpoint.execute('identify');
     await endpoint.execute('pause');
     await endpoint.execute('resume');
-    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 0 } });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 1 } });
     await endpoint.execute('goHome');
 
     expect(cloud.locate).toHaveBeenCalledWith(movaDevice.did);
@@ -353,6 +370,7 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(cloud.resumeCleaning).toHaveBeenCalledWith(movaDevice.did);
     expect(cloud.stopCleaning).toHaveBeenCalledTimes(2);
     expect(cloud.goHome).toHaveBeenCalledWith(movaDevice.did);
+    await waitForCommandSideEffects();
     expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.SeekingCharger);
     expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBeNull();
   });
@@ -370,10 +388,38 @@ describe('MOVA robotic vacuum endpoint', () => {
     );
 
     expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Charging);
-    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(0);
+    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(1);
     expect(endpoint.lastAttribute('PowerSource', 'batPercentRemaining')).toBe(200);
     expect(endpoint.lastAttribute('PowerSource', 'batChargeState')).toBe(2);
     expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBe(12);
+  });
+
+  it('does not let stale charging status override high-confidence cleaning state', async () => {
+    const { registered, endpoint } = await createRegisteredVacuum();
+
+    registered.updateStatus(
+      status({
+        state: MovaState.Cleaning,
+        status: MovaStatus.Charging,
+      }),
+    );
+
+    expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Running);
+    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(2);
+  });
+
+  it('keeps run mode cleaning when MOVA reports a generic cleaning status with a stale paused state', async () => {
+    const { registered, endpoint } = await createRegisteredVacuum();
+
+    registered.updateStatus(
+      status({
+        state: MovaState.Paused,
+        status: MovaStatus.Cleaning,
+      }),
+    );
+
+    expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Running);
+    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(2);
   });
 
   it('reflects active cleaning, mapping, clean-mode, battery, and error changes from cloud status', async () => {
@@ -392,12 +438,12 @@ describe('MOVA robotic vacuum endpoint', () => {
     registered.updateStatus(status({ state: MovaState.Idle, status: MovaStatus.Idle, battery: 100 }));
 
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcOperationalState', attribute: 'operationalState', value: RvcOperationalState.Running });
-    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 1 });
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 2 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'RvcRunMode', attribute: 'currentMode', value: 3 });
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcCleanMode', attribute: 'currentMode', value: 8 });
     expect(endpoint.attributes).toContainEqual({ cluster: 'RvcOperationalState', attribute: 'operationalError', value: { errorStateId: RvcOperationalState.Stuck } });
-    expect(endpoint.attributes).toContainEqual({ cluster: 'PowerSource', attribute: 'batChargeState', value: 3 });
     expect(endpoint.attributes).toContainEqual({ cluster: 'PowerSource', attribute: 'batChargeState', value: 2 });
+    expect(endpoint.attributes).toContainEqual({ cluster: 'PowerSource', attribute: 'batChargeState', value: 3 });
   });
 
   it('keeps the previous battery attributes when MQTT sends a partial zero-battery update', async () => {

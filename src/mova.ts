@@ -56,14 +56,20 @@ const RvcOperationalStateValue = {
   Docked: 0x42,
 } as const;
 
+const RvcRunModeValue = {
+  Idle: 1,
+  Cleaning: 2,
+  Mapping: 3,
+} as const;
+
 const ServiceAreaType = {
   Room: 0,
 } as const;
 
 const RVC_RUN_MODES = [
-  { label: 'Idle', mode: 0, modeTags: [{ value: RvcRunModeTag.Idle }] },
-  { label: 'Cleaning', mode: 1, modeTags: [{ value: RvcRunModeTag.Cleaning }] },
-  { label: 'Mapping', mode: 2, modeTags: [{ value: RvcRunModeTag.Mapping }] },
+  { label: 'Idle', mode: RvcRunModeValue.Idle, modeTags: [{ value: RvcRunModeTag.Idle }] },
+  { label: 'Cleaning', mode: RvcRunModeValue.Cleaning, modeTags: [{ value: RvcRunModeTag.Cleaning }] },
+  { label: 'Mapping', mode: RvcRunModeValue.Mapping, modeTags: [{ value: RvcRunModeTag.Mapping }] },
 ];
 
 interface RvcCleanModeDefinition {
@@ -110,6 +116,19 @@ const RVC_OPERATIONAL_STATES = [
   { operationalStateId: RvcOperationalStateValue.Docked },
 ];
 
+const HIGH_CONFIDENCE_CLEANING_STATES = [MovaState.Cleaning, MovaState.Mopping];
+const ACTIVE_CLEANING_STATES = [...HIGH_CONFIDENCE_CLEANING_STATES, MovaState.ZonedCleaning, MovaState.SpotCleaning, MovaState.ManualCleaning, MovaState.CruiseRunning];
+const ACTIVE_CLEANING_STATUSES = [
+  MovaStatus.Cleaning,
+  MovaStatus.Sweeping,
+  MovaStatus.Mopping,
+  MovaStatus.SweepingAndMopping,
+  MovaStatus.SegmentCleaning,
+  MovaStatus.ZoneCleaning,
+  MovaStatus.SpotCleaning,
+];
+const DEFINITIVE_DOCKED_STATUSES = [MovaStatus.Charging, MovaStatus.ChargingComplete, MovaStatus.Sleeping, MovaStatus.Standby, MovaStatus.Idle];
+
 const CONFIG_SUCTION_LEVELS: Record<MovaSuctionLevelName, MovaFanSpeed> = {
   quiet: MovaFanSpeed.Quiet,
   standard: MovaFanSpeed.Standard,
@@ -151,6 +170,48 @@ function movaToRvcCleanMode(cleaningMode: MovaCleaningMode, fanSpeed: MovaFanSpe
   if (cleaningMode === MovaCleaningMode.SweepingAndMopping) return rvcCleanModeFor('vac', fanSpeed);
   if (cleaningMode === MovaCleaningMode.Mopping) return rvcCleanModeFor('mop', fanSpeed);
   return rvcCleanModeFor('vac-mop', fanSpeed);
+}
+
+function getRunModeFromMova(state: MovaState, status: MovaStatus): number {
+  if (HIGH_CONFIDENCE_CLEANING_STATES.includes(state)) return RvcRunModeValue.Cleaning;
+  if (DEFINITIVE_DOCKED_STATUSES.includes(status)) return RvcRunModeValue.Idle;
+  if (ACTIVE_CLEANING_STATES.includes(state) || ACTIVE_CLEANING_STATUSES.includes(status)) return RvcRunModeValue.Cleaning;
+  if (state === MovaState.FastMapping || status === MovaStatus.FastMapping) return RvcRunModeValue.Mapping;
+  return RvcRunModeValue.Idle;
+}
+
+function operationalStateName(value: number): string {
+  switch (value) {
+    case RvcOperationalStateValue.Stopped:
+      return 'Stopped';
+    case RvcOperationalStateValue.Running:
+      return 'Running';
+    case RvcOperationalStateValue.Paused:
+      return 'Paused';
+    case RvcOperationalStateValue.Error:
+      return 'Error';
+    case RvcOperationalStateValue.SeekingCharger:
+      return 'SeekingCharger';
+    case RvcOperationalStateValue.Charging:
+      return 'Charging';
+    case RvcOperationalStateValue.Docked:
+      return 'Docked';
+    default:
+      return `Unknown(${value})`;
+  }
+}
+
+function runModeName(value: number): string {
+  switch (value) {
+    case RvcRunModeValue.Idle:
+      return 'Idle';
+    case RvcRunModeValue.Cleaning:
+      return 'Cleaning';
+    case RvcRunModeValue.Mapping:
+      return 'Mapping';
+    default:
+      return `Unknown(${value})`;
+  }
 }
 
 /**
@@ -216,25 +277,7 @@ export async function discoverAndRegisterDevices(
   const initialOperationalState = initialStatus ? getOperationalStateFromMova(initialStatus.state, initialStatus.status) : RvcOperationalStateValue.Docked;
 
   // Determine initial run mode from status (must match logic in updateStatus)
-  // Definitive dock statuses override any stale state values
-  const definitiveDockedStatuses = [MovaStatus.Charging, MovaStatus.ChargingComplete, MovaStatus.Sleeping, MovaStatus.Standby, MovaStatus.Idle];
-  let initialRunMode = 0; // Idle
-  if (initialStatus && !definitiveDockedStatuses.includes(initialStatus.status)) {
-    const activeCleaningStates = [MovaState.Cleaning, MovaState.Mopping, MovaState.ManualCleaning, MovaState.ZonedCleaning, MovaState.SpotCleaning, MovaState.CruiseRunning];
-    const activeCleaningStatuses = [
-      MovaStatus.Sweeping,
-      MovaStatus.Mopping,
-      MovaStatus.SweepingAndMopping,
-      MovaStatus.SegmentCleaning,
-      MovaStatus.ZoneCleaning,
-      MovaStatus.SpotCleaning,
-    ];
-    if (activeCleaningStates.includes(initialStatus.state) || activeCleaningStatuses.includes(initialStatus.status)) {
-      initialRunMode = 1; // Cleaning
-    } else if (initialStatus.state === MovaState.FastMapping || initialStatus.status === MovaStatus.FastMapping) {
-      initialRunMode = 2; // Mapping
-    }
-  }
+  const initialRunMode = initialStatus ? getRunModeFromMova(initialStatus.state, initialStatus.status) : RvcRunModeValue.Idle;
 
   // Create the RVC device using RoboticVacuumCleaner class
   // Use 'server' mode for Apple Home compatibility
@@ -265,6 +308,21 @@ export async function discoverAndRegisterDevices(
   let trackedOperationalState = initialOperationalState;
   let trackedError: number | null | undefined = undefined; // undefined = not yet set
   let selectedAreas: number[] = [...initialSelectedAreas];
+  let trackedCurrentArea: number | null = null;
+
+  function runOptimisticCloudCommand(description: string, command: () => Promise<boolean>, rollback: () => void): void {
+    void command()
+      .then((success) => {
+        if (!success) {
+          log.warn(`${description} failed; reverting optimistic Matter state`);
+          rollback();
+        }
+      })
+      .catch((error) => {
+        log.error(`${description} failed: ${error}`);
+        rollback();
+      });
+  }
 
   function normalizeSelectedAreas(areas: number[] | undefined): number[] {
     if (!areas) {
@@ -279,6 +337,28 @@ export async function discoverAndRegisterDevices(
 
   function isWholeHomeSelection(areas: number[]): boolean {
     return supportedAreaIds.length > 0 && areas.length === supportedAreaIds.length && supportedAreaIds.every((id) => areas.includes(id));
+  }
+
+  function currentAreaForSelection(areas: number[]): number | null {
+    return areas[0] ?? supportedAreaIds[0] ?? null;
+  }
+
+  function setCurrentArea(area: number | null): void {
+    trackedCurrentArea = area;
+    rvc.setAttribute('ServiceArea', 'currentArea', trackedCurrentArea, log);
+  }
+
+  function setCurrentAreaAfterCommand(area: number | null): void {
+    setTimeout(() => {
+      setCurrentArea(area);
+    }, 0);
+  }
+
+  function setOperationalStateAfterCommand(operationalState: number): void {
+    setTimeout(() => {
+      trackedOperationalState = operationalState;
+      rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
+    }, 0);
   }
 
   // ============================================================================
@@ -310,37 +390,61 @@ export async function discoverAndRegisterDevices(
     const isCleanMode = clusterName === 'rvcCleanMode';
 
     if (isRunMode) {
-      // RvcRunMode: Change running mode (Idle=0, Cleaning=1, Mapping=2)
+      // RvcRunMode: Change running mode (Idle=1, Cleaning=2, Mapping=3)
       log.info(`RvcRunMode.changeToMode for ${device.name}: mode=${newMode}`);
 
-      if (newMode === 0) {
+      if (newMode === RvcRunModeValue.Idle) {
         // Idle - Stop cleaning
-        const success = await cloud.stopCleaning(device.did);
-        if (success) {
-          trackedRunMode = 0;
-          rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
-          rvc.setAttribute('ServiceArea', 'currentArea', null, log);
-        }
-      } else if (newMode === 1) {
+        const previousRunMode = trackedRunMode;
+        const previousOperationalState = trackedOperationalState;
+        const previousCurrentArea = trackedCurrentArea;
+
+        trackedRunMode = RvcRunModeValue.Idle;
+        trackedOperationalState = RvcOperationalStateValue.Docked;
+        setCurrentAreaAfterCommand(null);
+
+        runOptimisticCloudCommand(
+          `Stop cleaning for ${device.name}`,
+          () => cloud.stopCleaning(device.did),
+          () => {
+            trackedRunMode = previousRunMode;
+            rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
+            trackedOperationalState = previousOperationalState;
+            rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
+            setCurrentArea(previousCurrentArea);
+          },
+        );
+      } else if (newMode === RvcRunModeValue.Cleaning) {
         // Cleaning - Start cleaning
         const movaCleanMode = rvcToMovaCleanMode(trackedCleanMode, vacuumAndMopMode) ?? MovaCleaningMode.SweepingAndMopping;
         const movaFanSpeed = rvcToMovaFanSpeed(trackedCleanMode, suctionLevel);
         const cleanWholeHome = isWholeHomeSelection(selectedAreas);
+        const targetAreas = [...selectedAreas];
+        const targetCurrentArea = currentAreaForSelection(targetAreas);
+        const previousRunMode = trackedRunMode;
+        const previousOperationalState = trackedOperationalState;
+        const previousCurrentArea = trackedCurrentArea;
         log.info(`Starting ${cleanWholeHome ? 'cleaning' : `rooms ${selectedAreas.join(', ')}`} with mode=${trackedCleanMode}, suction=${movaFanSpeed}`);
 
-        const success = !cleanWholeHome
-          ? await cloud.cleanRooms(device.did, selectedAreas, 1, movaCleanMode, movaFanSpeed)
-          : await cloud.startCleaning(device.did, movaCleanMode, movaFanSpeed);
-        if (success) {
-          trackedRunMode = 1;
-          rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
-          trackedOperationalState = RvcOperationalStateValue.Running;
-          rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
-        }
-      } else if (newMode === 2) {
+        trackedRunMode = RvcRunModeValue.Cleaning;
+        trackedOperationalState = RvcOperationalStateValue.Running;
+        setCurrentAreaAfterCommand(targetCurrentArea);
+
+        runOptimisticCloudCommand(
+          `Start cleaning for ${device.name}`,
+          () => (!cleanWholeHome ? cloud.cleanRooms(device.did, targetAreas, 1, movaCleanMode, movaFanSpeed) : cloud.startCleaning(device.did, movaCleanMode, movaFanSpeed)),
+          () => {
+            trackedRunMode = previousRunMode;
+            rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
+            trackedOperationalState = previousOperationalState;
+            rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
+            setCurrentArea(previousCurrentArea);
+          },
+        );
+      } else if (newMode === RvcRunModeValue.Mapping) {
         // Mapping - Not directly controllable via MIOT
         // Fast mapping must be initiated from the Mova app
-        log.warn(`Mapping mode (2) cannot be started via Matter - use the Mova app to initiate mapping`);
+        log.warn(`Mapping mode (${RvcRunModeValue.Mapping}) cannot be started via Matter - use the Mova app to initiate mapping`);
       }
     } else if (isCleanMode) {
       // RvcCleanMode: Change cleaning mode (vacuum/mop selection)
@@ -369,7 +473,7 @@ export async function discoverAndRegisterDevices(
     const success = await cloud.pauseCleaning(device.did);
     if (success) {
       // Set run mode to Idle and operational state to Paused
-      trackedRunMode = 0; // Idle
+      trackedRunMode = RvcRunModeValue.Idle;
       rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
       trackedOperationalState = RvcOperationalStateValue.Paused;
       rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
@@ -382,7 +486,7 @@ export async function discoverAndRegisterDevices(
     const success = await cloud.resumeCleaning(device.did);
     if (success) {
       // Set run mode to Cleaning and operational state to Running
-      trackedRunMode = 1; // Cleaning
+      trackedRunMode = RvcRunModeValue.Cleaning;
       rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
       trackedOperationalState = RvcOperationalStateValue.Running;
       rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
@@ -394,18 +498,30 @@ export async function discoverAndRegisterDevices(
   rvc.addCommandHandler('goHome', async () => {
     log.info(`GoHome command for ${device.name} - stopping cleaning and returning to dock`);
 
-    // Stop cleaning first (this halts any active cleaning operation)
-    await cloud.stopCleaning(device.did);
+    const previousRunMode = trackedRunMode;
+    const previousOperationalState = trackedOperationalState;
+    const previousCurrentArea = trackedCurrentArea;
 
-    // Then send to dock
-    const success = await cloud.goHome(device.did);
-    if (success) {
-      trackedRunMode = 0; // Idle
-      rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
-      trackedOperationalState = RvcOperationalStateValue.SeekingCharger;
-      rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
-      rvc.setAttribute('ServiceArea', 'currentArea', null, log);
-    }
+    trackedRunMode = RvcRunModeValue.Idle;
+    trackedOperationalState = RvcOperationalStateValue.SeekingCharger;
+    setCurrentAreaAfterCommand(null);
+    setOperationalStateAfterCommand(RvcOperationalStateValue.SeekingCharger);
+
+    runOptimisticCloudCommand(
+      `Return to dock for ${device.name}`,
+      async () => {
+        // Stop cleaning first (this halts any active cleaning operation), then send to dock.
+        await cloud.stopCleaning(device.did);
+        return cloud.goHome(device.did);
+      },
+      () => {
+        trackedRunMode = previousRunMode;
+        rvc.setAttribute('RvcRunMode', 'currentMode', trackedRunMode, log);
+        trackedOperationalState = previousOperationalState;
+        rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
+        setCurrentArea(previousCurrentArea);
+      },
+    );
   });
 
   // ServiceArea: SelectAreas command
@@ -430,36 +546,18 @@ export async function discoverAndRegisterDevices(
   function updateStatus(status: DeviceStatus): void {
     // Update operational state
     const newOperationalState = getOperationalStateFromMova(status.state, status.status);
+    const newRunMode = getRunModeFromMova(status.state, status.status);
+    const newCurrentArea = status.currentArea ?? (newRunMode === RvcRunModeValue.Cleaning ? currentAreaForSelection(selectedAreas) : null);
+    log.info(
+      `Status mapping for ${device.name}: MOVA state=${status.state}, status=${status.status}, currentArea=${status.currentArea ?? 'null'} -> Matter operationalState=${operationalStateName(newOperationalState)}(${newOperationalState}), runMode=${runModeName(newRunMode)}(${newRunMode}), currentArea=${newCurrentArea ?? 'null'}`,
+    );
+
     if (newOperationalState !== trackedOperationalState) {
       log.info(`Operational state: ${trackedOperationalState} -> ${newOperationalState} (state=${status.state}, status=${status.status})`);
       trackedOperationalState = newOperationalState;
       rvc.setAttribute('RvcOperationalState', 'operationalState', trackedOperationalState, log);
     }
 
-    // Update run mode based on state and status
-    // IMPORTANT: Check definitive dock statuses FIRST - these override stale state values
-    // The device may report state=ManualCleaning while status=Charging when idle at dock
-    let newRunMode = 0; // Idle
-    const definitiveDockedStatuses = [MovaStatus.Charging, MovaStatus.ChargingComplete, MovaStatus.Sleeping, MovaStatus.Standby, MovaStatus.Idle];
-
-    if (!definitiveDockedStatuses.includes(status.status)) {
-      // Only check for active cleaning if NOT at dock
-      const activeCleaningStates = [MovaState.Cleaning, MovaState.Mopping, MovaState.ManualCleaning, MovaState.ZonedCleaning, MovaState.SpotCleaning, MovaState.CruiseRunning];
-      const activeCleaningStatuses = [
-        MovaStatus.Sweeping,
-        MovaStatus.Mopping,
-        MovaStatus.SweepingAndMopping,
-        MovaStatus.SegmentCleaning,
-        MovaStatus.ZoneCleaning,
-        MovaStatus.SpotCleaning,
-      ];
-
-      if (activeCleaningStates.includes(status.state) || activeCleaningStatuses.includes(status.status)) {
-        newRunMode = 1; // Cleaning
-      } else if (status.state === MovaState.FastMapping || status.status === MovaStatus.FastMapping) {
-        newRunMode = 2; // Mapping - only for explicit fast mapping mode (user-initiated)
-      }
-    }
     if (newRunMode !== trackedRunMode) {
       log.info(`Run mode: ${trackedRunMode} -> ${newRunMode} (state=${status.state}, status=${status.status})`);
       trackedRunMode = newRunMode;
@@ -513,7 +611,7 @@ export async function discoverAndRegisterDevices(
 
     // Update current area if cleaning
     try {
-      rvc.setAttribute('ServiceArea', 'currentArea', status.currentArea ?? null, log);
+      setCurrentArea(newCurrentArea);
     } catch {
       // ServiceArea may not be supported
     }
@@ -580,7 +678,7 @@ export async function discoverAndRegisterDevices(
     log.info(`Set initial operational state to ${initialOperationalState} (0=Stopped, 1=Running, 2=Paused, 3=Error, 64=SeekingCharger, 65=Charging, 66=Docked)`);
 
     rvc.setAttribute('RvcRunMode', 'currentMode', initialRunMode, log);
-    log.info(`Set initial run mode to ${initialRunMode} (0=Idle, 1=Cleaning, 2=Mapping)`);
+    log.info(`Set initial run mode to ${initialRunMode} (1=Idle, 2=Cleaning, 3=Mapping)`);
 
     rvc.setAttribute('RvcCleanMode', 'currentMode', trackedCleanMode, log);
     log.info(`Set initial clean mode to ${trackedCleanMode} (0-3=Vacuum suction, 4-7=Vacuum&Mop suction, 8=MopOnly)`);

@@ -305,6 +305,8 @@ const activeOperationStates = new Set([
   MovaState.GoCharging,
 ]);
 
+const highConfidenceCleaningStates = new Set([MovaState.Cleaning, MovaState.Mopping]);
+
 /**
  * Map Mova state/status to Matter RVC operational state.
  * Prioritizes paused status, definitive dock statuses, then checks for active operations.
@@ -316,6 +318,10 @@ export function getOperationalStateFromMova(state: MovaState, status: MovaStatus
   // Paused status takes priority - if vacuum reports paused, honor it
   if (status === MovaStatus.Paused) {
     return RvcOperationalStateId.Paused;
+  }
+
+  if (highConfidenceCleaningStates.has(state)) {
+    return RvcOperationalStateId.Running;
   }
 
   // Dock statuses override stale state values (e.g., state=ManualCleaning but status=Charging)
