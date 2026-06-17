@@ -317,6 +317,8 @@ export async function discoverAndRegisterDevices(
           log.warn(`${description} failed; reverting optimistic Matter state`);
           rollback();
         }
+
+        return undefined;
       })
       .catch((error) => {
         log.error(`${description} failed: ${error}`);
