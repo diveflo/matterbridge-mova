@@ -10,6 +10,8 @@ updates:
         update-types:
           - minor
           - patch
+    # Revisit after eslint-plugin-import supports ESLint 10.
+    # As of 2026-07-04, eslint-plugin-import@2.32.0 peers only through ESLint 9.
     ignore:
       - dependency-name: '@eslint/js'
         update-types:
