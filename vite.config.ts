@@ -21,8 +21,6 @@ export default defineConfig({
         // Exclude test files that may live under src
         'src/**/*.test.{ts,tsx,js,jsx}',
         'src/**/*.spec.{ts,tsx,js,jsx}',
-        // Exclude helper file(s) not meant for coverage
-        'src/**/jestHelpers.ts',
         // Exclude type declaration files
         'src/**/*.d.ts',
       ],

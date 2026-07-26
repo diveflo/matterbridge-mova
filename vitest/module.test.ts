@@ -1,3 +1,5 @@
+import { describe, expect, it } from 'vitest';
+
 import initializePlugin, { MovaPlatform } from '../src/module.js';
 
 describe('Matterbridge MOVA module', () => {

@@ -55,11 +55,8 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test
-        run: npm run test
-
-      - name: Test Vitest with coverage
-        run: npm run test:vitest:coverage
+      - name: Test with coverage
+        run: npm run test:coverage
 
       - name: Build
         run: npm run buildProduction

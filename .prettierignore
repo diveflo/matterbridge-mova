@@ -6,7 +6,6 @@
 .cache/
 coverage/
 dist/
-jest/
 node_modules/
 temp/
 
