@@ -72,8 +72,21 @@ jobs:
       - name: Bump patch version
         run: 'npm version patch -m "chore(release): v%s [skip ci]"'
 
+      - name: Build release package
+        id: package
+        run: |
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "file=$(npm pack --ignore-scripts)" >> "$GITHUB_OUTPUT"
+
       - name: Push version commit and tag
         run: git push --follow-tags
 
       - name: Publish
         run: npm publish --provenance --access public
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_FILE: ${{ steps.package.outputs.file }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: gh release create "v${VERSION}" "${PACKAGE_FILE}" --verify-tag --generate-notes --title "v${VERSION}"
