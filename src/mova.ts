@@ -80,6 +80,35 @@ interface RvcCleanModeDefinition {
   fanSpeed?: MovaFanSpeed;
 }
 
+type MatterCommandData = Record<string, unknown>;
+
+function asCommandData(value: unknown): MatterCommandData | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as MatterCommandData) : undefined;
+}
+
+function commandField(data: unknown, field: string): unknown {
+  const command = asCommandData(data);
+  const request = asCommandData(command?.request);
+  return request?.[field] ?? command?.[field];
+}
+
+function commandCluster(data: unknown): string | undefined {
+  const cluster = asCommandData(data)?.cluster;
+  return typeof cluster === 'string' ? cluster : undefined;
+}
+
+function commandMode(data: unknown): number | undefined {
+  const mode = commandField(data, 'newMode');
+  return typeof mode === 'number' && Number.isSafeInteger(mode) ? mode : undefined;
+}
+
+function commandAreas(data: unknown): number[] | undefined | null {
+  const areas = commandField(data, 'newAreas');
+  if (areas === undefined) return undefined;
+  if (!Array.isArray(areas) || !areas.every((area) => typeof area === 'number' && Number.isSafeInteger(area))) return null;
+  return areas;
+}
+
 const VACUUM_QUIET_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Quiet }];
 const VACUUM_STANDARD_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Min }];
 const VACUUM_INTENSE_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Max }];
@@ -310,20 +339,20 @@ export async function discoverAndRegisterDevices(
   let selectedAreas: number[] = [...initialSelectedAreas];
   let trackedCurrentArea: number | null = null;
 
-  function runOptimisticCloudCommand(description: string, command: () => Promise<boolean>, rollback: () => void): void {
-    void command()
-      .then((success) => {
-        if (!success) {
-          log.warn(`${description} failed; reverting optimistic Matter state`);
-          rollback();
-        }
+  async function runOptimisticCloudCommand(description: string, command: () => Promise<boolean>, rollback: () => void): Promise<void> {
+    try {
+      const success = await command();
+      if (success) return;
+      log.warn(`${description} failed; reverting optimistic Matter state`);
+    } catch (error) {
+      log.error(`${description} failed: ${error}`);
+    }
 
-        return undefined;
-      })
-      .catch((error) => {
-        log.error(`${description} failed: ${error}`);
-        rollback();
-      });
+    try {
+      rollback();
+    } catch (error) {
+      log.error(`${description} rollback failed: ${error}`);
+    }
   }
 
   function normalizeSelectedAreas(areas: number[] | undefined): number[] {
@@ -375,10 +404,9 @@ export async function discoverAndRegisterDevices(
 
   // changeToMode command handler - shared by RvcRunMode and RvcCleanMode clusters
   // Matterbridge passes the cluster name (e.g., "rvcRunMode", "rvcCleanMode") to distinguish
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  rvc.addCommandHandler('changeToMode', async (data: any) => {
-    const newMode = data.request?.newMode ?? data.newMode;
-    const clusterName = data.cluster as string | undefined;
+  rvc.addCommandHandler('changeToMode', async (data: unknown) => {
+    const newMode = commandMode(data);
+    const clusterName = commandCluster(data);
 
     log.debug(`changeToMode: cluster=${clusterName}, newMode=${newMode}`);
 
@@ -405,7 +433,7 @@ export async function discoverAndRegisterDevices(
         trackedOperationalState = RvcOperationalStateValue.Docked;
         setCurrentAreaAfterCommand(null);
 
-        runOptimisticCloudCommand(
+        await runOptimisticCloudCommand(
           `Stop cleaning for ${device.name}`,
           () => cloud.stopCleaning(device.did),
           () => {
@@ -432,7 +460,7 @@ export async function discoverAndRegisterDevices(
         trackedOperationalState = RvcOperationalStateValue.Running;
         setCurrentAreaAfterCommand(targetCurrentArea);
 
-        runOptimisticCloudCommand(
+        await runOptimisticCloudCommand(
           `Start cleaning for ${device.name}`,
           () => (!cleanWholeHome ? cloud.cleanRooms(device.did, targetAreas, 1, movaCleanMode, movaFanSpeed) : cloud.startCleaning(device.did, movaCleanMode, movaFanSpeed)),
           () => {
@@ -509,7 +537,7 @@ export async function discoverAndRegisterDevices(
     setCurrentAreaAfterCommand(null);
     setOperationalStateAfterCommand(RvcOperationalStateValue.SeekingCharger);
 
-    runOptimisticCloudCommand(
+    await runOptimisticCloudCommand(
       `Return to dock for ${device.name}`,
       async () => {
         // Stop cleaning first (this halts any active cleaning operation), then send to dock.
@@ -527,9 +555,12 @@ export async function discoverAndRegisterDevices(
   });
 
   // ServiceArea: SelectAreas command
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  rvc.addCommandHandler('selectAreas', async (data: any) => {
-    const areas: number[] | undefined = data.request?.newAreas ?? data.newAreas;
+  rvc.addCommandHandler('selectAreas', async (data: unknown) => {
+    const areas = commandAreas(data);
+    if (areas === null) {
+      log.warn(`SelectAreas command for ${device.name} ignored invalid area list`);
+      return;
+    }
     const nextAreas = normalizeSelectedAreas(areas);
 
     selectedAreas = nextAreas;

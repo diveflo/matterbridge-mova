@@ -285,7 +285,9 @@ describe('MOVA robotic vacuum endpoint', () => {
   it('ignores malformed, unsupported, and app-only mode changes without sending cloud commands', async () => {
     const { endpoint, cloud, log } = await createRegisteredVacuum();
 
+    await endpoint.execute('changeToMode');
     await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: {} });
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: '2' } });
     await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 3 } });
     await endpoint.execute('changeToMode', { cluster: 'rvcCleanMode', request: { newMode: 99 } });
 
@@ -363,6 +365,16 @@ describe('MOVA robotic vacuum endpoint', () => {
     await endpoint.execute('selectAreas', { request: {} });
 
     expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toEqual([11, 12]);
+  });
+
+  it('ignores malformed service-area selections', async () => {
+    const { endpoint, log } = await createRegisteredVacuum();
+    const initialSelection = endpoint.lastAttribute('ServiceArea', 'selectedAreas');
+
+    await endpoint.execute('selectAreas', { request: { newAreas: [11, '12'] } });
+
+    expect(log.warn).toHaveBeenCalledWith(`SelectAreas command for ${movaDevice.name} ignored invalid area list`);
+    expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toBe(initialSelection);
   });
 
   it('does not change cleaning mode while the vacuum is actively running', async () => {
