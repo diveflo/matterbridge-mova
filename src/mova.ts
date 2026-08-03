@@ -9,16 +9,27 @@ import { RoboticVacuumCleaner } from 'matterbridge/devices';
 
 import type { MovaPlatform } from './platform.js';
 import type { MovaCloudProtocol } from './movaCloud.js';
-import type { MovaDevice, DeviceStatus, RoomInfo, MovaSuctionLevelName, MovaVacuumAndMopMode } from './types.js';
-import { MovaState, MovaStatus, MovaCleaningMode, MovaFanSpeed } from './types.js';
+import type { MovaDevice, DeviceStatus, RoomInfo } from './types.js';
+import { MovaState, MovaStatus, MovaCleaningMode } from './types.js';
 import { getOperationalStateFromMova, getOperationalErrorFromMova } from './constants.js';
-
-const BatChargeState = {
-  Unknown: 0,
-  IsCharging: 1,
-  IsAtFullCharge: 2,
-  IsNotCharging: 3,
-} as const;
+import {
+  BatChargeState,
+  RvcOperationalStateValue,
+  RvcRunModeValue,
+  RVC_OPERATIONAL_STATES,
+  RVC_RUN_MODES,
+  RVC_SUPPORTED_CLEAN_MODES,
+  SERVICE_AREA_ROOM_TYPE,
+  configuredSuctionLevel,
+  configuredVacuumAndMopMode,
+  defaultRvcCleanMode,
+  getRunModeFromMova,
+  movaToRvcCleanMode,
+  operationalStateName,
+  runModeName,
+  rvcToMovaCleanMode,
+  rvcToMovaFanSpeed,
+} from './rvcModes.js';
 
 export interface MovaVacuumDevice {
   did: string;
@@ -27,57 +38,6 @@ export interface MovaVacuumDevice {
   device: RoboticVacuumCleaner;
   updateStatus: (status: DeviceStatus) => void;
   updateRooms: (rooms: RoomInfo[]) => void;
-}
-
-// RVC Mode Tag constants
-const RvcRunModeTag = {
-  Idle: 16384,
-  Cleaning: 16385,
-  Mapping: 16386,
-} as const;
-
-const RvcCleanModeTag = {
-  Quiet: 0x0002,
-  Min: 0x0006,
-  Max: 0x0007,
-  DeepClean: 0x4000,
-  Vacuum: 16385,
-  Mop: 16386,
-} as const;
-
-// RVC Operational State values (Matter 1.4)
-const RvcOperationalStateValue = {
-  Stopped: 0x00,
-  Running: 0x01,
-  Paused: 0x02,
-  Error: 0x03,
-  SeekingCharger: 0x40,
-  Charging: 0x41,
-  Docked: 0x42,
-} as const;
-
-const RvcRunModeValue = {
-  Idle: 1,
-  Cleaning: 2,
-  Mapping: 3,
-} as const;
-
-const ServiceAreaType = {
-  Room: 0,
-} as const;
-
-const RVC_RUN_MODES = [
-  { label: 'Idle', mode: RvcRunModeValue.Idle, modeTags: [{ value: RvcRunModeTag.Idle }] },
-  { label: 'Cleaning', mode: RvcRunModeValue.Cleaning, modeTags: [{ value: RvcRunModeTag.Cleaning }] },
-  { label: 'Mapping', mode: RvcRunModeValue.Mapping, modeTags: [{ value: RvcRunModeTag.Mapping }] },
-];
-
-interface RvcCleanModeDefinition {
-  label: string;
-  mode: number;
-  modeTags: Array<{ value: number }>;
-  cleanMode: 'vac' | 'vac-mop' | 'mop';
-  fanSpeed?: MovaFanSpeed;
 }
 
 type MatterCommandData = Record<string, unknown>;
@@ -109,140 +69,6 @@ function commandAreas(data: unknown): number[] | undefined | null {
   return areas;
 }
 
-const VACUUM_QUIET_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Quiet }];
-const VACUUM_STANDARD_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Min }];
-const VACUUM_INTENSE_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Max }];
-const VACUUM_MAX_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.DeepClean }];
-const VACUUM_AND_MOP_QUIET_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.Quiet }];
-const VACUUM_AND_MOP_STANDARD_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.Min }];
-const VACUUM_AND_MOP_INTENSE_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.Max }];
-const VACUUM_AND_MOP_MAX_MODE_TAGS = [{ value: RvcCleanModeTag.Vacuum }, { value: RvcCleanModeTag.Mop }, { value: RvcCleanModeTag.DeepClean }];
-const MOP_MODE_TAGS = [{ value: RvcCleanModeTag.Mop }];
-
-const RVC_CLEAN_MODES: RvcCleanModeDefinition[] = [
-  { label: 'Vacuum Quiet', mode: 0, modeTags: VACUUM_QUIET_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Quiet },
-  { label: 'Vacuum Standard', mode: 1, modeTags: VACUUM_STANDARD_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Standard },
-  { label: 'Vacuum Intense', mode: 2, modeTags: VACUUM_INTENSE_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Intense },
-  { label: 'Vacuum Max', mode: 3, modeTags: VACUUM_MAX_MODE_TAGS, cleanMode: 'vac', fanSpeed: MovaFanSpeed.Max },
-  { label: 'Vacuum & Mop Quiet', mode: 4, modeTags: VACUUM_AND_MOP_QUIET_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Quiet },
-  { label: 'Vacuum & Mop Standard', mode: 5, modeTags: VACUUM_AND_MOP_STANDARD_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Standard },
-  { label: 'Vacuum & Mop Intense', mode: 6, modeTags: VACUUM_AND_MOP_INTENSE_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Intense },
-  { label: 'Vacuum & Mop Max', mode: 7, modeTags: VACUUM_AND_MOP_MAX_MODE_TAGS, cleanMode: 'vac-mop', fanSpeed: MovaFanSpeed.Max },
-  { label: 'Mop Only', mode: 8, modeTags: MOP_MODE_TAGS, cleanMode: 'mop' },
-];
-
-const RVC_CLEAN_MODE_BY_MODE = new Map(RVC_CLEAN_MODES.map((mode) => [mode.mode, mode]));
-const RVC_SUPPORTED_CLEAN_MODES = RVC_CLEAN_MODES.map(({ label, mode, modeTags }) => ({ label, mode, modeTags }));
-
-// operationalStateLabel must NOT be set for standard states (0-127) per Matter spec
-const RVC_OPERATIONAL_STATES = [
-  { operationalStateId: RvcOperationalStateValue.Stopped },
-  { operationalStateId: RvcOperationalStateValue.Running },
-  { operationalStateId: RvcOperationalStateValue.Paused },
-  { operationalStateId: RvcOperationalStateValue.Error },
-  { operationalStateId: RvcOperationalStateValue.SeekingCharger },
-  { operationalStateId: RvcOperationalStateValue.Charging },
-  { operationalStateId: RvcOperationalStateValue.Docked },
-];
-
-const HIGH_CONFIDENCE_CLEANING_STATES = [MovaState.Cleaning, MovaState.Mopping];
-const ACTIVE_CLEANING_STATES = [...HIGH_CONFIDENCE_CLEANING_STATES, MovaState.ZonedCleaning, MovaState.SpotCleaning, MovaState.ManualCleaning, MovaState.CruiseRunning];
-const ACTIVE_CLEANING_STATUSES = [
-  MovaStatus.Cleaning,
-  MovaStatus.Sweeping,
-  MovaStatus.Mopping,
-  MovaStatus.SweepingAndMopping,
-  MovaStatus.SegmentCleaning,
-  MovaStatus.ZoneCleaning,
-  MovaStatus.SpotCleaning,
-];
-const DEFINITIVE_DOCKED_STATUSES = [MovaStatus.Charging, MovaStatus.ChargingComplete, MovaStatus.Sleeping, MovaStatus.Standby, MovaStatus.Idle];
-
-const CONFIG_SUCTION_LEVELS: Record<MovaSuctionLevelName, MovaFanSpeed> = {
-  quiet: MovaFanSpeed.Quiet,
-  standard: MovaFanSpeed.Standard,
-  intense: MovaFanSpeed.Intense,
-  max: MovaFanSpeed.Max,
-};
-
-function configuredSuctionLevel(value: unknown): MovaFanSpeed {
-  if (typeof value === 'string' && value in CONFIG_SUCTION_LEVELS) {
-    return CONFIG_SUCTION_LEVELS[value as MovaSuctionLevelName];
-  }
-  return MovaFanSpeed.Standard;
-}
-
-function configuredVacuumAndMopMode(value: unknown): MovaVacuumAndMopMode {
-  return value === 'vac-then-mop' ? 'vac-then-mop' : 'vac-mop';
-}
-
-function rvcToMovaCleanMode(rvcMode: number, vacuumAndMopMode: MovaVacuumAndMopMode): MovaCleaningMode | undefined {
-  const mode = RVC_CLEAN_MODE_BY_MODE.get(rvcMode);
-  if (!mode) return undefined;
-
-  if (mode.cleanMode === 'vac') return MovaCleaningMode.SweepingAndMopping; // S70 raw 2 = vacuum only
-  if (mode.cleanMode === 'vac-mop') return vacuumAndMopMode === 'vac-then-mop' ? MovaCleaningMode.MoppingAfterSweeping : MovaCleaningMode.Sweeping;
-  if (mode.cleanMode === 'mop') return MovaCleaningMode.Mopping;
-  return undefined;
-}
-
-function rvcToMovaFanSpeed(rvcMode: number, fallback: MovaFanSpeed): MovaFanSpeed {
-  return RVC_CLEAN_MODE_BY_MODE.get(rvcMode)?.fanSpeed ?? fallback;
-}
-
-function rvcCleanModeFor(cleanMode: 'vac' | 'vac-mop' | 'mop', fanSpeed: MovaFanSpeed): number {
-  const mode = RVC_CLEAN_MODES.find((entry) => entry.cleanMode === cleanMode && (entry.fanSpeed === fanSpeed || entry.fanSpeed === undefined));
-  return mode?.mode ?? 1;
-}
-
-function movaToRvcCleanMode(cleaningMode: MovaCleaningMode, fanSpeed: MovaFanSpeed): number {
-  if (cleaningMode === MovaCleaningMode.SweepingAndMopping) return rvcCleanModeFor('vac', fanSpeed);
-  if (cleaningMode === MovaCleaningMode.Mopping) return rvcCleanModeFor('mop', fanSpeed);
-  return rvcCleanModeFor('vac-mop', fanSpeed);
-}
-
-function getRunModeFromMova(state: MovaState, status: MovaStatus): number {
-  if (HIGH_CONFIDENCE_CLEANING_STATES.includes(state)) return RvcRunModeValue.Cleaning;
-  if (DEFINITIVE_DOCKED_STATUSES.includes(status)) return RvcRunModeValue.Idle;
-  if (ACTIVE_CLEANING_STATES.includes(state) || ACTIVE_CLEANING_STATUSES.includes(status)) return RvcRunModeValue.Cleaning;
-  if (state === MovaState.FastMapping || status === MovaStatus.FastMapping) return RvcRunModeValue.Mapping;
-  return RvcRunModeValue.Idle;
-}
-
-function operationalStateName(value: number): string {
-  switch (value) {
-    case RvcOperationalStateValue.Stopped:
-      return 'Stopped';
-    case RvcOperationalStateValue.Running:
-      return 'Running';
-    case RvcOperationalStateValue.Paused:
-      return 'Paused';
-    case RvcOperationalStateValue.Error:
-      return 'Error';
-    case RvcOperationalStateValue.SeekingCharger:
-      return 'SeekingCharger';
-    case RvcOperationalStateValue.Charging:
-      return 'Charging';
-    case RvcOperationalStateValue.Docked:
-      return 'Docked';
-    default:
-      return `Unknown(${value})`;
-  }
-}
-
-function runModeName(value: number): string {
-  switch (value) {
-    case RvcRunModeValue.Idle:
-      return 'Idle';
-    case RvcRunModeValue.Cleaning:
-      return 'Cleaning';
-    case RvcRunModeValue.Mapping:
-      return 'Mapping';
-    default:
-      return `Unknown(${value})`;
-  }
-}
-
 /**
  * Discover and register Mova vacuum as Matter RVC device.
  *
@@ -264,7 +90,7 @@ export async function discoverAndRegisterDevices(
   const vacuumAndMopMode = configuredVacuumAndMopMode(platform.config.vacuumAndMopMode);
   const initialCleanMode = initialStatus
     ? movaToRvcCleanMode(initialStatus.cleaningMode ?? MovaCleaningMode.SweepingAndMopping, initialStatus.fanSpeed)
-    : rvcCleanModeFor('vac', suctionLevel);
+    : defaultRvcCleanMode(suctionLevel);
 
   log.info(`Creating Matter RVC device for ${device.name} (${device.model})`);
 
@@ -279,7 +105,7 @@ export async function discoverAndRegisterDevices(
             locationInfo: {
               locationName: room.name,
               floorNumber: room.floorId ?? null,
-              areaType: ServiceAreaType.Room,
+              areaType: SERVICE_AREA_ROOM_TYPE,
             },
             landmarkInfo: null,
           },
@@ -293,7 +119,7 @@ export async function discoverAndRegisterDevices(
               locationInfo: {
                 locationName: 'Home',
                 floorNumber: null,
-                areaType: ServiceAreaType.Room,
+                areaType: SERVICE_AREA_ROOM_TYPE,
               },
               landmarkInfo: null,
             },
@@ -638,7 +464,7 @@ export async function discoverAndRegisterDevices(
         rvc.setAttribute('RvcCleanMode', 'currentMode', trackedCleanMode, log);
       }
     } else if (trackedCleanMode === undefined) {
-      trackedCleanMode = rvcCleanModeFor('vac', suctionLevel);
+      trackedCleanMode = defaultRvcCleanMode(suctionLevel);
       rvc.setAttribute('RvcCleanMode', 'currentMode', trackedCleanMode, log);
     }
 
@@ -674,7 +500,7 @@ export async function discoverAndRegisterDevices(
         locationInfo: {
           locationName: room.name,
           floorNumber: room.floorId ?? null,
-          areaType: ServiceAreaType.Room,
+          areaType: SERVICE_AREA_ROOM_TYPE,
         },
         landmarkInfo: null,
       },
