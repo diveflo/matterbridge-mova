@@ -147,6 +147,55 @@ describe('MOVA cloud response parsing', () => {
       { id: 11, name: 'Kitchen', floorId: 4 },
       { id: 12, name: 'Hallway', floorId: 8 },
     ]);
+
+    const rooms = cloud.getCachedRooms('vacuum-1');
+    const firstRoom = rooms[0];
+    expect(firstRoom).toBeDefined();
+    if (!firstRoom) throw new Error('Expected a cached room');
+    firstRoom.name = 'Mutated outside the cache';
+    expect(cloud.getCachedRooms('vacuum-1')[0]?.name).toBe('Kitchen');
+  });
+});
+
+describe('MOVA cloud request safety', () => {
+  it('shares one authentication request between concurrent token refreshes', async () => {
+    const cloud = createCloud();
+    (cloud as any).loginCredentials = { username: 'user@example.com', password: 'secret', country: 'eu' };
+
+    let finishLogin: ((result: { success: boolean }) => void) | undefined;
+    const login = vi.spyOn(cloud, 'login').mockImplementation(
+      async () =>
+        new Promise((resolve) => {
+          finishLogin = resolve;
+        }),
+    );
+
+    const firstRefresh = (cloud as any).refreshToken();
+    const secondRefresh = (cloud as any).refreshToken();
+
+    expect(login).toHaveBeenCalledOnce();
+    finishLogin?.({ success: true });
+    await expect(Promise.all([firstRefresh, secondRefresh])).resolves.toEqual([true, true]);
+  });
+
+  it('rejects cloud commands when the API reports failure or no response', async () => {
+    const cloud = createCloud();
+    const apiCall = vi.fn().mockResolvedValueOnce({ code: 403, msg: 'denied' }).mockResolvedValueOnce(null);
+    (cloud as any).apiCall = apiCall;
+
+    await expect(cloud.sendCommand('vacuum-1', 'action', [])).rejects.toThrow('code=403, msg=denied');
+    await expect(cloud.sendCommand('vacuum-1', 'action', [])).rejects.toThrow('returned no response');
+  });
+
+  it('clears credentials and cached state on disconnect', async () => {
+    const cloud = createCloud();
+    (cloud as any).loginCredentials = { username: 'user@example.com', password: 'secret', country: 'eu' };
+    (cloud as any).cachedRooms.set('vacuum-1', [{ id: 1, name: 'Kitchen' }]);
+
+    await cloud.disconnect();
+
+    expect((cloud as any).loginCredentials).toBeNull();
+    expect(cloud.getCachedRooms('vacuum-1')).toEqual([]);
   });
 });
 

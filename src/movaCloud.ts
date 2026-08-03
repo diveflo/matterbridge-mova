@@ -70,7 +70,7 @@ export class MovaCloudProtocol {
   private deviceModels: Map<string, string> = new Map(); // Map device ID to model
   private deviceBindDomains: Map<string, string> = new Map(); // Map device ID to command shard bindDomain
   private loginCredentials: { username: string; password: string; country: MovaCountry } | null = null;
-  private isRefreshing = false;
+  private refreshPromise: Promise<boolean> | null = null;
 
   constructor(log: AnsiLogger) {
     this.log = log;
@@ -104,30 +104,30 @@ export class MovaCloudProtocol {
    * Uses refresh_token if available, otherwise re-authenticates with credentials.
    */
   private async refreshToken(): Promise<boolean> {
-    // Prevent concurrent refresh attempts
-    if (this.isRefreshing) {
-      this.log.debug('Token refresh already in progress, waiting...');
-      // Wait for ongoing refresh to complete
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      return this.session !== null;
+    if (this.refreshPromise) {
+      this.log.debug('Token refresh already in progress; joining it');
+      return this.refreshPromise;
     }
 
-    this.isRefreshing = true;
+    this.refreshPromise = this.reauthenticate();
 
     try {
-      // Try using refresh token first (not implemented in Mova API, but kept for future)
-      // For now, re-authenticate with stored credentials
-      if (this.loginCredentials) {
-        this.log.info('Re-authenticating with stored credentials...');
-        const result = await this.login(this.loginCredentials.username, this.loginCredentials.password, this.loginCredentials.country);
-        return result.success;
-      }
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
 
+  private async reauthenticate(): Promise<boolean> {
+    const credentials = this.loginCredentials;
+    if (!credentials) {
       this.log.error('No credentials available for token refresh');
       return false;
-    } finally {
-      this.isRefreshing = false;
     }
+
+    this.log.info('Re-authenticating with stored credentials...');
+    const result = await this.login(credentials.username, credentials.password, credentials.country);
+    return result.success;
   }
 
   /**
@@ -217,10 +217,7 @@ export class MovaCloudProtocol {
 
       this.log.info(`Got MQTT credentials: uid=${this.session.userId}, key length=${mqttKey?.length || 0}`);
 
-      // Store credentials for token refresh (only on initial login, not during refresh)
-      if (!this.isRefreshing) {
-        this.loginCredentials = { username, password, country };
-      }
+      this.loginCredentials = { username, password, country };
 
       this.log.info('Login successful');
       return {
@@ -513,7 +510,7 @@ export class MovaCloudProtocol {
     const cachedRooms = this.cachedRooms.get(did);
     if (cachedRooms && cachedRooms.length > 0) {
       this.log.info(`Using ${cachedRooms.length} cached rooms from MQTT for ${did}`);
-      return cachedRooms;
+      return cachedRooms.map((room) => ({ ...room }));
     }
 
     // Room data comes via MQTT when device is active
@@ -975,7 +972,7 @@ export class MovaCloudProtocol {
    * @param did
    */
   getCachedRooms(did: string): RoomInfo[] {
-    return this.cachedRooms.get(did) || [];
+    return this.cachedRooms.get(did)?.map((room) => ({ ...room })) ?? [];
   }
 
   /**
@@ -1147,11 +1144,16 @@ export class MovaCloudProtocol {
 
     this.log.info(`Cloud command ${method} response: code=${response?.code}, msg=${response?.msg}, data=${JSON.stringify(response?.data)}`);
 
-    if (response?.code !== 0) {
-      this.log.error(`Cloud command ${method} failed: code=${response?.code}, msg=${response?.msg}`);
+    if (!response) {
+      throw new Error(`Cloud command ${method} returned no response`);
+    }
+    if (response.code !== 0) {
+      const message = `Cloud command ${method} failed: code=${response.code}, msg=${response.msg ?? 'unknown error'}`;
+      this.log.error(message);
+      throw new Error(message);
     }
 
-    return response?.data;
+    return response.data;
   }
 
   /**
@@ -1431,6 +1433,8 @@ export class MovaCloudProtocol {
     this.deviceModels.clear();
     this.deviceOwnerIds.clear();
     this.deviceBindDomains.clear();
+    this.loginCredentials = null;
+    this.refreshPromise = null;
     this.session = null;
   }
 }
