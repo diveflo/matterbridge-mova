@@ -150,6 +150,13 @@ describe('MOVA platform lifecycle', () => {
     expect(log.warn).toHaveBeenCalledWith('Refresh interval too low, setting to 30 seconds');
   });
 
+  it('uses a safe default for invalid refresh intervals', () => {
+    const { platform, log } = createPlatform({ refreshInterval: 'soon' });
+
+    expect((platform as any).refreshInterval).toBe(120);
+    expect(log.warn).toHaveBeenCalledWith('Invalid refresh interval, using 120 seconds');
+  });
+
   it('rejects unsupported Matterbridge versions', () => {
     mocks.setMatterbridgeVersionSupported(false);
 
@@ -170,7 +177,16 @@ describe('MOVA platform lifecycle', () => {
 
     await platform.onStart('test');
 
-    expect(log.error).toHaveBeenCalledWith('Missing country/region in configuration');
+    expect(log.error).toHaveBeenCalledWith('Missing or unsupported country/region in configuration');
+    expect(cloud.login).not.toHaveBeenCalled();
+  });
+
+  it('does not login when country is unsupported', async () => {
+    const { platform, cloud, log } = createPlatform({ username: 'user@example.com', password: 'secret', country: 'invalid' });
+
+    await platform.onStart('test');
+
+    expect(log.error).toHaveBeenCalledWith('Missing or unsupported country/region in configuration');
     expect(cloud.login).not.toHaveBeenCalled();
   });
 
@@ -380,6 +396,29 @@ describe('MOVA platform lifecycle', () => {
     expect(cloud.disconnect).toHaveBeenCalled();
     expect(platform.unregisterAllDevices).toHaveBeenCalled();
     expect((platform as any).statusInterval).toBeNull();
+    expect((platform as any).devicePollingTimers.size).toBe(0);
+  });
+
+  it('does not publish or reschedule an in-flight poll after shutdown', async () => {
+    const { platform, cloud } = createPlatform({ refreshInterval: 120 });
+    (platform as any).devices.set(cloudDevice.did, discoveredDevice);
+
+    let resolveStatus: (status: DeviceStatus | null) => void = () => {};
+    const pendingStatus = new Promise<DeviceStatus | null>((resolve) => {
+      resolveStatus = resolve;
+    });
+    cloud.getDeviceProperties.mockReturnValueOnce(pendingStatus as never);
+
+    await platform.onConfigure();
+    vi.advanceTimersByTime(120_000);
+    await platform.onShutdown('test');
+    resolveStatus(activeStatus);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(discoveredDevice.updateStatus).not.toHaveBeenCalled();
+    expect((platform as any).devicePollingTimers.size).toBe(0);
+    (platform as any).scheduleDevicePoll(cloudDevice.did, 120);
     expect((platform as any).devicePollingTimers.size).toBe(0);
   });
 });

@@ -11,8 +11,14 @@ import { AnsiLogger, LogLevel } from 'matterbridge/logger';
 
 import { MovaCloudProtocol } from './movaCloud.js';
 import { discoverAndRegisterDevices, type MovaVacuumDevice } from './mova.js';
-import type { MovaConfig, MovaCountry, MovaDevice, DeviceStatus, RoomInfo } from './types.js';
+import type { MovaCountry, MovaDevice, DeviceStatus, RoomInfo } from './types.js';
 import { MovaState } from './types.js';
+
+const MOVA_COUNTRIES = new Set<MovaCountry>(['cn', 'eu', 'us', 'sg', 'ru']);
+
+function isMovaCountry(value: unknown): value is MovaCountry {
+  return typeof value === 'string' && MOVA_COUNTRIES.has(value as MovaCountry);
+}
 
 // Storage keys for persistence
 const STORAGE_KEYS = {
@@ -56,6 +62,7 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
   private devicePollingTimers: Map<string, NodeJS.Timeout> = new Map(); // Per-device adaptive polling timers
   private refreshInterval: number;
   private lastDeviceState: Map<string, MovaState> = new Map(); // Track state for adaptive polling
+  private pollingStopped = false;
 
   constructor(matterbridge: PlatformMatterbridge, log: AnsiLogger, config: PlatformConfig) {
     super(matterbridge, log, config);
@@ -69,8 +76,11 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
     this.cloud = new MovaCloudProtocol(log);
 
     // Get refresh interval from config (default 120 seconds)
-    this.refreshInterval = (config.refreshInterval as number) ?? 120;
-    if (this.refreshInterval < 30) {
+    const configuredRefreshInterval = config.refreshInterval;
+    this.refreshInterval = typeof configuredRefreshInterval === 'number' && Number.isFinite(configuredRefreshInterval) ? configuredRefreshInterval : 120;
+    if (configuredRefreshInterval !== undefined && this.refreshInterval === 120 && configuredRefreshInterval !== 120) {
+      this.log.warn('Invalid refresh interval, using 120 seconds');
+    } else if (this.refreshInterval < 30) {
       this.refreshInterval = 30;
       this.log.warn('Refresh interval too low, setting to 30 seconds');
     }
@@ -79,25 +89,26 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
   }
 
   override async onStart(reason?: string): Promise<void> {
+    this.pollingStopped = false;
     this.log.info(`onStart called with reason: ${reason ?? 'none'}`);
 
     // Wait for platform to be ready
     await this.ready;
 
     // Validate configuration
-    const config = this.config as unknown as MovaConfig;
-    if (!config.username || !config.password) {
+    const { username, password, country } = this.config;
+    if (typeof username !== 'string' || username.length === 0 || typeof password !== 'string' || password.length === 0) {
       this.log.error('Missing username or password in configuration');
       return;
     }
 
-    if (!config.country) {
-      this.log.error('Missing country/region in configuration');
+    if (!isMovaCountry(country)) {
+      this.log.error('Missing or unsupported country/region in configuration');
       return;
     }
 
     // Login to Mova Cloud
-    const loginResult = await this.cloud.login(config.username, config.password, config.country as MovaCountry);
+    const loginResult = await this.cloud.login(username, password, country);
 
     if (!loginResult.success) {
       this.log.error(`Failed to login to Mova Cloud: ${loginResult.error}`);
@@ -151,6 +162,7 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
   }
 
   override async onShutdown(reason?: string): Promise<void> {
+    this.pollingStopped = true;
     await super.onShutdown(reason);
     this.log.info(`onShutdown called with reason: ${reason ?? 'none'}`);
 
@@ -283,7 +295,7 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
    * Each device gets its own polling timer that adjusts based on state.
    */
   private startStatusPolling(): void {
-    if (this.statusInterval) {
+    if (this.statusInterval || this.pollingStopped) {
       return;
     }
 
@@ -295,7 +307,8 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
     }
 
     // Also keep a fallback interval to ensure all devices are polled periodically
-    this.statusInterval = setInterval(async () => {
+    this.statusInterval = setInterval(() => {
+      if (this.pollingStopped) return;
       for (const [did] of this.devices) {
         // Only poll if no device-specific timer is active (safety net)
         if (!this.devicePollingTimers.has(did)) {
@@ -310,6 +323,8 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
    * After polling, reschedules based on the device's current state.
    */
   private scheduleDevicePoll(did: string, intervalSeconds: number): void {
+    if (this.pollingStopped || !this.devices.has(did)) return;
+
     // Clear any existing timer for this device
     const existingTimer = this.devicePollingTimers.get(did);
     if (existingTimer) {
@@ -318,9 +333,11 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
 
     const timer = setTimeout(async () => {
       this.devicePollingTimers.delete(did);
+      if (this.pollingStopped) return;
 
       try {
         const status = await this.cloud.getDeviceProperties(did);
+        if (this.pollingStopped) return;
         if (status) {
           this.handleDeviceStatus(did, status);
 
@@ -341,6 +358,7 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
           this.scheduleDevicePoll(did, Math.max(this.refreshInterval, POLLING_INTERVALS.idle));
         }
       } catch (error) {
+        if (this.pollingStopped) return;
         this.log.error(`Failed to get status for ${did}: ${error}`);
         // On error, retry with idle interval
         this.scheduleDevicePoll(did, Math.max(this.refreshInterval, POLLING_INTERVALS.idle));
@@ -357,6 +375,8 @@ export class MovaPlatform extends MatterbridgeDynamicPlatform {
    * @param status
    */
   private handleDeviceStatus(did: string, status: DeviceStatus): void {
+    if (this.pollingStopped) return;
+
     const device = this.devices.get(did);
     if (!device) {
       return;
