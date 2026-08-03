@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MIOT_ACTIONS, MIOT_ACTION_PARAMS, MIOT_PROPERTIES, MOVA_DEVICE_LIST_ENDPOINT, MOVA_STATUS_VALUES } from '../src/constants.js';
 import { MovaCloudProtocol } from '../src/movaCloud.js';
+import { parseRoomsFromMapData } from '../src/mapParser.js';
 import { MovaCleaningMode, MovaErrorCode, MovaFanSpeed, MovaState, MovaStatus, MovaWaterFlow } from '../src/types.js';
 
 function createLog() {
@@ -236,9 +237,7 @@ describe('MOVA cloud command payloads', () => {
 
 describe('MOVA cloud map parsing', () => {
   it('extracts custom and generated room names from seg_inf map data', () => {
-    const cloud = createCloud();
-
-    const rooms = (cloud as any).parseRoomsFromMapData({
+    const rooms = parseRoomsFromMapData({
       seg_inf: {
         '11': { type: 4, name: Buffer.from('Kitchen Island').toString('base64') },
         '12': { type: 2 },
@@ -251,6 +250,20 @@ describe('MOVA cloud map parsing', () => {
       { id: 12, name: 'Primary Bedroom', floorId: 2 },
       { id: 13, name: 'Primary Bedroom 2', floorId: 2 },
     ]);
+  });
+
+  it('parses base64 JSON map payloads and safely rejects malformed data', () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        seg_inf: {
+          '7': { type: 12 },
+        },
+      }),
+    ).toString('base64');
+
+    expect(parseRoomsFromMapData(payload)).toEqual([{ id: 7, name: 'Office', floorId: 12 }]);
+    expect(parseRoomsFromMapData('not a map')).toEqual([]);
+    expect(parseRoomsFromMapData({ seg_inf: { invalid: null } })).toEqual([]);
   });
 
   it('stores rooms found during proactive map fetch and calls room update callbacks', async () => {

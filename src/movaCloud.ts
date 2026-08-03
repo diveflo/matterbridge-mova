@@ -7,7 +7,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import { inflateSync } from 'node:zlib';
 
 import type { MqttClient } from 'mqtt';
 import { AnsiLogger } from 'matterbridge/logger';
@@ -45,6 +44,7 @@ import {
   MOVA_STATUS_VALUES,
   isSupportedModel,
 } from './constants.js';
+import { parseRoomsFromMapData } from './mapParser.js';
 
 // Buffer time before token expiry to trigger refresh (5 minutes)
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -522,229 +522,6 @@ export class MovaCloudProtocol {
     return [];
   }
 
-  private decodeMapPayload(mapData: unknown): Record<string, unknown> | null {
-    try {
-      if (typeof mapData === 'string') {
-        try {
-          return JSON.parse(mapData) as Record<string, unknown>;
-        } catch {
-          try {
-            const decoded = Buffer.from(mapData, 'base64');
-            if (decoded[0] === 0x78) {
-              const decompressed = inflateSync(decoded);
-
-              if (decompressed.length > 1000) {
-                const searchStart = Math.max(0, decompressed.length - 50000);
-                const endSection = decompressed.subarray(searchStart).toString('latin1');
-
-                const rismIndex = endSection.indexOf('"rism"');
-                if (rismIndex !== -1) {
-                  // Find outermost JSON containing rism
-                  for (let searchBack = rismIndex; searchBack >= 0; searchBack--) {
-                    if (endSection[searchBack] !== '{') continue;
-
-                    let braceCount = 0;
-                    let braceEnd = -1;
-                    for (let i = searchBack; i < endSection.length; i++) {
-                      if (endSection[i] === '{') braceCount++;
-                      if (endSection[i] === '}') braceCount--;
-                      if (braceCount === 0) {
-                        braceEnd = i;
-                        break;
-                      }
-                    }
-
-                    if (braceEnd > searchBack) {
-                      const jsonStr = endSection.substring(searchBack, braceEnd + 1);
-                      if (jsonStr.includes('"rism"') && jsonStr.length < 50000) {
-                        try {
-                          return JSON.parse(jsonStr) as Record<string, unknown>;
-                        } catch {
-                          // Continue searching
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            } else {
-              return JSON.parse(decoded.toString('utf-8')) as Record<string, unknown>;
-            }
-          } catch {
-            return null;
-          }
-        }
-      } else if (typeof mapData === 'object' && mapData !== null) {
-        return mapData as Record<string, unknown>;
-      }
-
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  private decodeRismPayload(rism: unknown): Record<string, unknown> | null {
-    if (!rism || typeof rism !== 'string' || rism.length === 0) {
-      return null;
-    }
-
-    try {
-      const standardBase64 = rism.replace(/-/g, '+').replace(/_/g, '/');
-      const rismDecoded = Buffer.from(standardBase64, 'base64');
-
-      if (rismDecoded[0] !== 0x78) {
-        return JSON.parse(rismDecoded.toString('utf-8')) as Record<string, unknown>;
-      }
-
-      const rismDecompressed = inflateSync(rismDecoded);
-      const rismStr = rismDecompressed.toString('utf-8');
-
-      try {
-        return JSON.parse(rismStr) as Record<string, unknown>;
-      } catch {
-        const segInfIndex = rismStr.indexOf('"seg_inf"');
-        if (segInfIndex === -1) {
-          return null;
-        }
-
-        const segInfStart = rismStr.indexOf('{', segInfIndex);
-        if (segInfStart === -1) {
-          return null;
-        }
-
-        let braceCount = 0;
-        let segInfEnd = -1;
-        for (let i = segInfStart; i < rismStr.length; i++) {
-          if (rismStr[i] === '{') braceCount++;
-          if (rismStr[i] === '}') braceCount--;
-          if (braceCount === 0) {
-            segInfEnd = i;
-            break;
-          }
-        }
-
-        if (segInfEnd <= segInfStart) {
-          return null;
-        }
-
-        return { seg_inf: JSON.parse(rismStr.substring(segInfStart, segInfEnd + 1)) as Record<string, unknown> };
-      }
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Parse room/segment info from map data.
-   * Mova map format: base64 + zlib → binary with JSON at end → rism field → base64 + zlib → binary with seg_inf
-   *
-   * @param mapData
-   */
-  private parseRoomsFromMapData(mapData: unknown): RoomInfo[] {
-    try {
-      const parsed = this.decodeMapPayload(mapData);
-      if (!parsed) {
-        return [];
-      }
-
-      const rism = this.decodeRismPayload(parsed.rism);
-      if (parsed.seg_inf) {
-        return this.parseSegInf(parsed.seg_inf as Record<string, unknown>);
-      }
-      if (rism?.seg_inf) {
-        return this.parseSegInf(rism.seg_inf as Record<string, unknown>);
-      }
-      return [];
-    } catch (error) {
-      this.log.error(`Failed to parse map data: ${error}`);
-      return [];
-    }
-  }
-
-  // Mova room type IDs to human-readable names
-  private static readonly ROOM_TYPE_NAMES: Record<number, string> = {
-    0: 'Room',
-    1: 'Living Room',
-    2: 'Primary Bedroom',
-    3: 'Study',
-    4: 'Kitchen',
-    5: 'Dining Hall',
-    6: 'Bathroom',
-    7: 'Balcony',
-    8: 'Corridor',
-    9: 'Utility Room',
-    10: 'Closet',
-    11: 'Meeting Room',
-    12: 'Office',
-    13: 'Fitness Area',
-    14: 'Recreation Area',
-    15: 'Secondary Bedroom',
-  };
-
-  /**
-   * Parse seg_inf object into RoomInfo array.
-   * Room names are base64-encoded in the 'name' field.
-   *
-   * @param segInf
-   */
-  private parseSegInf(segInf: Record<string, unknown>): RoomInfo[] {
-    const rooms: RoomInfo[] = [];
-    const keys = Object.keys(segInf);
-
-    // Track room type counts for generating unique names like "Bedroom 2"
-    const typeCounters: Record<number, number> = {};
-
-    for (const segIdStr of keys) {
-      const segId = parseInt(segIdStr, 10);
-      if (isNaN(segId)) continue;
-
-      const segData = segInf[segIdStr] as Record<string, unknown>;
-      const roomType = typeof segData?.type === 'number' ? segData.type : 0;
-
-      let roomName: string | null = null;
-
-      // Try to decode the name field (base64-encoded custom name)
-      if (segData?.name && typeof segData.name === 'string' && segData.name.length > 0) {
-        try {
-          const decoded = Buffer.from(segData.name, 'base64').toString('utf-8');
-          if (decoded && decoded.trim().length > 0) {
-            roomName = decoded;
-          }
-        } catch {
-          if (segData.name.trim().length > 0) {
-            roomName = segData.name;
-          }
-        }
-      }
-
-      // If no custom name, use room type to generate a meaningful name
-      if (!roomName) {
-        const typeName = MovaCloudProtocol.ROOM_TYPE_NAMES[roomType] || 'Room';
-        typeCounters[roomType] = (typeCounters[roomType] || 0) + 1;
-
-        // Add number suffix if this is not the first room of this type
-        if (typeCounters[roomType] > 1) {
-          roomName = `${typeName} ${typeCounters[roomType]}`;
-        } else {
-          roomName = typeName;
-        }
-      }
-
-      rooms.push({
-        id: segId,
-        name: roomName,
-        floorId: roomType,
-      });
-    }
-
-    if (rooms.length > 0) {
-      this.log.info(`Extracted ${rooms.length} rooms: ${rooms.map((r) => r.name).join(', ')}`);
-    }
-
-    return rooms;
-  }
-
   /**
    * Try to fetch map data proactively on startup.
    * Uses the known cloud storage path pattern: ali_dreame/{ownerUid}/{did}/{mapNumber}
@@ -810,7 +587,7 @@ export class MovaCloudProtocol {
             if (value && typeof value === 'string' && value.length > 50) {
               // Check if this value might contain segment info
               if (value.includes('seg_inf') || value.includes('"name"')) {
-                const rooms = this.parseRoomsFromMapData(value);
+                const rooms = parseRoomsFromMapData(value);
                 if (rooms.length > 0) {
                   this.log.info(`Found ${rooms.length} rooms from cloud storage: ${rooms.map((r) => r.name).join(', ')}`);
                   this.cachedRooms.set(did, rooms);
@@ -847,7 +624,7 @@ export class MovaCloudProtocol {
             const mapText = await mapResponse.text();
 
             // Try parsing directly (may already be base64-encoded)
-            let rooms = this.parseRoomsFromMapData(mapText);
+            let rooms = parseRoomsFromMapData(mapText);
             if (rooms.length > 0) {
               this.log.info(`Found ${rooms.length} rooms from ${source}: ${rooms.map((r) => r.name).join(', ')}`);
               this.cachedRooms.set(did, rooms);
@@ -861,7 +638,7 @@ export class MovaCloudProtocol {
             // If that failed and it looks like binary, try base64-encoding it
             if (mapText.charCodeAt(0) < 32 || mapText.charCodeAt(0) > 126) {
               const mapBuffer = await (await fetch(url)).arrayBuffer();
-              rooms = this.parseRoomsFromMapData(Buffer.from(mapBuffer).toString('base64'));
+              rooms = parseRoomsFromMapData(Buffer.from(mapBuffer).toString('base64'));
               if (rooms.length > 0) {
                 this.log.info(`Found ${rooms.length} rooms from ${source}: ${rooms.map((r) => r.name).join(', ')}`);
                 this.cachedRooms.set(did, rooms);
@@ -1123,7 +900,7 @@ export class MovaCloudProtocol {
         const mapDataProps = props.filter((p) => (p.siid === 6 && (p.piid === 1 || p.piid === 2 || p.piid === 8)) || (p.siid === 99 && p.piid === 98));
         for (const prop of mapDataProps) {
           if (prop.value) {
-            const rooms = this.parseRoomsFromMapData(prop.value);
+            const rooms = parseRoomsFromMapData(prop.value);
             if (rooms.length > 0) {
               this.log.info(`Parsed ${rooms.length} rooms from MQTT: ${rooms.map((r) => r.name).join(', ')}`);
               this.cachedRooms.set(did, rooms);
@@ -1155,7 +932,7 @@ export class MovaCloudProtocol {
         for (const result of results) {
           if (result.siid === 6 && result.value && result.code === 0) {
             this.log.info(`Got map property from MQTT result: siid=6 piid=${result.piid}`);
-            const rooms = this.parseRoomsFromMapData(result.value);
+            const rooms = parseRoomsFromMapData(result.value);
             if (rooms.length > 0) {
               this.log.info(`Parsed ${rooms.length} rooms from MQTT result: ${rooms.map((r) => r.name).join(', ')}`);
               this.cachedRooms.set(did, rooms);
