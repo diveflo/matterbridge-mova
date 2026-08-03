@@ -127,26 +127,10 @@ function decodeRismPayload(rism: unknown): Record<string, unknown> | null {
     if (json) return json;
 
     const containingObject = findContainingJson(decompressed, 'seg_inf');
-    if (containingObject?.seg_inf) return containingObject;
-
-    const propertyIndex = decompressed.indexOf('"seg_inf"');
-    const objectStart = propertyIndex === -1 ? -1 : decompressed.indexOf('{', propertyIndex);
-    if (objectStart === -1) return null;
-
-    let depth = 0;
-    for (let end = objectStart; end < decompressed.length; end++) {
-      if (decompressed[end] === '{') depth++;
-      if (decompressed[end] === '}') depth--;
-      if (depth !== 0) continue;
-
-      const segInf = parseJsonRecord(decompressed.slice(objectStart, end + 1));
-      return segInf ? { seg_inf: segInf } : null;
-    }
+    return containingObject?.seg_inf ? containingObject : null;
   } catch {
     return null;
   }
-
-  return null;
 }
 
 function parseSegmentInfo(value: unknown): RoomInfo[] {
