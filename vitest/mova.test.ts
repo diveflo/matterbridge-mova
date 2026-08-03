@@ -309,6 +309,18 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Charging);
   });
 
+  it('logs rejected cloud commands and rolls back optimistic state', async () => {
+    const { endpoint, cloud, log } = await createRegisteredVacuum();
+    cloud.startCleaning.mockRejectedValueOnce(new Error('network unavailable'));
+
+    await endpoint.execute('changeToMode', { cluster: 'rvcRunMode', request: { newMode: 2 } });
+    await waitForCommandSideEffects();
+
+    expect(log.error).toHaveBeenCalledWith(`Start cleaning for ${movaDevice.name} failed: Error: network unavailable`);
+    expect(endpoint.lastAttribute('RvcRunMode', 'currentMode')).toBe(1);
+    expect(endpoint.lastAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.Charging);
+  });
+
   it('cleans only selected rooms when the service-area selection is narrower than the whole home', async () => {
     const { endpoint, cloud } = await createRegisteredVacuum();
 
@@ -343,6 +355,14 @@ describe('MOVA robotic vacuum endpoint', () => {
     expect(cloud.startCleaning).toHaveBeenCalledWith(movaDevice.did, MovaCleaningMode.SweepingAndMopping, MovaFanSpeed.Standard);
     await waitForCommandSideEffects();
     expect(endpoint.lastAttribute('ServiceArea', 'currentArea')).toBe(11);
+  });
+
+  it('treats a missing service-area selection as all rooms', async () => {
+    const { endpoint } = await createRegisteredVacuum();
+
+    await endpoint.execute('selectAreas', { request: {} });
+
+    expect(endpoint.lastAttribute('ServiceArea', 'selectedAreas')).toEqual([11, 12]);
   });
 
   it('does not change cleaning mode while the vacuum is actively running', async () => {
