@@ -76,7 +76,7 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
-    "@types/node": "26.2.0",
+    "@types/node": "26.4.0",
     "@vitest/coverage-v8": "^4.1.7",
     "@vitest/eslint-plugin": "^1.6.17",
     "eslint": "9.39.5",
@@ -86,7 +86,7 @@
     "eslint-plugin-n": "18.3.0",
     "eslint-plugin-prettier": "5.5.6",
     "eslint-plugin-promise": "7.3.0",
-    "npm-check-updates": "23.0.2",
+    "npm-check-updates": "23.1.0",
     "prettier": "3.9.6",
     "shx": "0.4.0",
     "typescript": "6.0.3",
